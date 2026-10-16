@@ -2247,7 +2247,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "auto_awesome",
     "website": "https://gemini.google.com",
     "authType": "cookie",
-    "authHint": "Paste the full cookie header, the __Secure-1PSID value, or a JSON cookie export from gemini.google.com. Not routable in this build: it needs a real browser, which the Go binary does not ship.",
+    "authHint": "Optional. Works with no cookie at all — an anonymous gemini.google.com session serves the free model. Paste __Secure-1PSID from a signed-in tab to reach the other models.",
     "noAuth": false,
     "serviceKinds": [
       "llm"

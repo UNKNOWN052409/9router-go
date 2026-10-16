@@ -128,3 +128,43 @@ func TestBrowserLoginProvidersAreIsolated(t *testing.T) {
 		t.Error("gemini-web and gemini share a base URL")
 	}
 }
+
+// TestGeminiWebIsReachableWithoutACredential pins the property that makes this
+// provider plug-and-play: the site answers an anonymous client.
+//
+// A connection with no key is only allowed through when the catalog declares
+// NoAuth, so a change that drops the flag takes the provider from working to
+// "no API key found" with nothing else in the diff to explain it.
+func TestGeminiWebIsReachableWithoutACredential(t *testing.T) {
+	cfg, ok := KnownProviders["gemini-web"]
+	if !ok {
+		t.Fatal("KnownProviders has no gemini-web entry")
+	}
+	if !cfg.NoAuth {
+		t.Error("gemini-web must be NoAuth: gemini.google.com serves an anonymous session")
+	}
+	if cfg.DefaultAPIKey == "" {
+		t.Error("gemini-web must carry a default key, or the router refuses a connection with no credential")
+	}
+}
+
+// TestGeminiWebDoesNotAdvertiseControlsTheWebSurfaceLacks pins the capability
+// override.
+//
+// The generic `*gemini-3*` pattern row describes the API surface and grants
+// vision, audio, video and search. The web surface has none of those, and a
+// client that sees the flags set will send an image and get an error back.
+func TestGeminiWebDoesNotAdvertiseControlsTheWebSurfaceLacks(t *testing.T) {
+	for _, model := range GetProviderModels("gemini-web") {
+		caps := GetCapabilitiesForModel("gemini-web", model)
+		if caps.Vision || caps.AudioInput || caps.VideoInput {
+			t.Errorf("%s: media input flags must be false on the web surface; got %+v", model, caps)
+		}
+		if !caps.Tools {
+			t.Errorf("%s: tool calling is supported through the prompt and must be advertised", model)
+		}
+		if caps.ThinkingFormat != "gemini-level" {
+			t.Errorf("%s: ThinkingFormat = %q, want gemini-level (the site's own enum)", model, caps.ThinkingFormat)
+		}
+	}
+}
