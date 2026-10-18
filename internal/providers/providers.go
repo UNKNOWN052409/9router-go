@@ -523,10 +523,19 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	// Subscription lane, distinct base path from the PAYG lane above
+	// (open-sse/providers/registry/opencode-go.js). It serves chat
+	// completions and System One only: its images/embeddings/audio/video
+	// routes answer 404 upstream, so no media override is declared here.
 	"opencode-go": {
-		BaseURL:    "https://opencode.ai/zen/go/v1/chat/completions",
-		AuthHeader: "Authorization",
-		AuthScheme: "bearer",
+		BaseURL:      "https://opencode.ai/zen/go/v1/chat/completions",
+		AuthHeader:   "Authorization",
+		AuthScheme:   "bearer",
+		SystemoneURL: "https://opencode.ai/zen/go/v1/systemone",
+		StaticHeaders: map[string]string{
+			"x-opencode-client": "desktop",
+			"User-Agent":        "opencode/1.18.31",
+		},
 	},
 	"venice": {
 		BaseURL:    "https://api.venice.ai/api/v1/chat/completions",

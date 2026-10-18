@@ -50,3 +50,14 @@ stitch-screenshots/
 # A pasted browser-login credential for scripts/deepseek-web-live.sh. Never
 # belongs in a commit, and `git add -A` would otherwise stage it silently.
 .ds-token
+
+# Local security-scan artifacts (findings ledger, hook state, report history).
+# Machine-local by construction — they describe this checkout, not the project.
+.mimosa/
+web/.mimosa/
+
+# Desktop start/kill shortcuts for the tunnel stack. They hardcode this
+# machine's absolute paths and the local admin port, so they are operator
+# tooling, not part of the project.
+9router-start.bat
+9router-kill.bat

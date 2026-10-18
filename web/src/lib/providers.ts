@@ -1311,19 +1311,38 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
   },
   {
     "id": "glm",
-    "name": "GLM Coding",
-    "category": "apikey",
+    "name": "Zai GLM Coding",
+    "category": "oauth",
     "alias": "glm",
     "color": "#2563EB",
     "icon": "code",
     "website": "https://open.bigmodel.cn",
-    "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys"},
-    "authType": "apikey",
+    "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys","signupUrl":"https://chat.z.ai"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "priority": 140,
     "serviceKinds": [
       "llm",
       "webSearch"
+    ]
+  },
+  {
+    "id": "nous",
+    "name": "Nous Research",
+    "category": "oauth",
+    "alias": "nous",
+    "color": "#7C3AED",
+    "icon": "psychology",
+    "website": "https://nousresearch.com",
+    "notice": {"apiKeyUrl":"https://portal.nousresearch.com/api-keys","signupUrl":"https://portal.nousresearch.com"},
+    "noAuth": false,
+    "authModes": ["oauth", "apikey"],
+    "priority": 65,
+    "modelsFetcher": {"url": "https://inference-api.nousresearch.com/v1/models", "type": "nous-free"},
+    "passthroughModels": true,
+    "serviceKinds": [
+      "llm",
+      "imageToText"
     ]
   },
   {
@@ -1689,11 +1708,12 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://opencode.ai/auth",
     "notice": {"text":"OpenCode Go subscription: $5/mo (then 10/mo). Access to Kimi, GLM, Qwen, MiMo, MiniMax models.","apiKeyUrl":"https://opencode.ai/auth"},
     "noAuth": false,
+    "systemoneConfig": {
+      "baseUrl": "https://opencode.ai/zen/go/v1/systemone",
+      "format": "systemone"
+    },
     "serviceKinds": [
-      "llm",
-      "image",
-      "video",
-      "embedding"
+      "llm"
     ]
   },
   {

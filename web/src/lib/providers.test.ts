@@ -56,6 +56,22 @@ describe('providers & media separation', () => {
     assert.ok(embeddingProviders.some((p) => p.id === 'voyage-ai'))
     assert.ok(embeddingProviders.some((p) => p.id === 'openai'))
 
+    // The OpenCode lanes are chat-only. Listing opencode-go under image/video/
+    // embedding put it on those dashboard pages, where every request 404s
+    // upstream (probed: zen/go/v1/{images,embeddings,audio,videos} all 404).
+    for (const id of ['opencode', 'opencode-go', 'opencode-zen']) {
+      for (const kind of ['image', 'video', 'embedding', 'tts', 'stt']) {
+        assert.strictEqual(
+          getProvidersByKind(kind).some((p) => p.id === id),
+          false,
+          `${id} must not be offered as a ${kind} provider`,
+        )
+      }
+    }
+    const go = PROVIDER_CATALOG.find((p) => p.id === 'opencode-go')
+    assert.deepStrictEqual(go?.serviceKinds, ['llm'])
+    assert.strictEqual(go?.systemoneConfig?.baseUrl, 'https://opencode.ai/zen/go/v1/systemone')
+
     assert.ok(MEDIA_PROVIDER_KINDS.length >= 6)
   })
 
