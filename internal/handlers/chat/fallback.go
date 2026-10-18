@@ -405,7 +405,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// beta query, the OAuth cloaking and the beta-flag merge below.
 	upstreamClaude := isAnthropic || servesClaudeMessages(provider, providerCfg)
 	compressStart := time.Now()
-	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
+	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative, provider, model)
 	compressDurMs := int(time.Since(compressStart).Milliseconds())
 	if compressDurMs <= 0 {
 		compressDurMs = 1
@@ -923,8 +923,10 @@ func isClientCanceled(ctx context.Context, err error) bool {
 // claudeNative indicates the body is in Claude Messages format (endpoint
 // /v1/messages): system prompts must go to the top-level "system" field —
 // a role:"system" message is rejected by the Anthropic API.
+// provider/model drive the persona lookup: a model-scoped persona outranks a
+// provider-scoped one.
 // false from compress/inject means nothing changed (or unparseable) — keep original, not a failure.
-func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, int, int, int) {
+func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool, provider, model string) ([]byte, int, int, int) {
 	if h.TokenSaver == nil {
 		return body, 0, 0, 0
 	}
@@ -987,6 +989,16 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 	if h.TokenSaver.ADHDEnabled() {
 		prompt := tokensaver.GetADHDPrompt(h.TokenSaver.ADHDLevel())
 		if next, did := inject(out, prompt); did {
+			out = next
+		}
+	}
+// Custom system prompt / model persona: a per-provider or per-model
+	// user-defined instruction, injected before the global prefix/suffix pair so
+	// that pair keeps its contract (prefix leads the system prompt, suffix is
+	// its last word). The persona never claims to be part of the model
+	// identity — it rides in the system channel only.
+	if persona, ok := h.TokenSaver.PersonaFor(provider, model); ok {
+		if next, did := inject(out, persona.SystemPrompt); did {
 			out = next
 		}
 	}

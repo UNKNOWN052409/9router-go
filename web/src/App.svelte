@@ -34,6 +34,7 @@
   import Toasts from './lib/ui/Toasts.svelte'
   import TerminalView from './components/TerminalView.svelte'
   import TokenSaverView from './components/TokenSaverView.svelte'
+  import PersonasView from './components/PersonasView.svelte'
   import TopBar from './components/TopBar.svelte'
   import { parseMediaProvider, parseProviderId, pathToTab, providerPath, mediaProviderPath, TAB_ROUTES, type ActiveTab, type MediaProviderRoute } from './lib/router'
   import { PROVIDER_CATALOG } from './lib/providers'
@@ -280,6 +281,7 @@
     'console-log': { title: 'Console Log', description: 'Live server console output' },
     terminal: { title: 'Console Log', description: 'Live server console output' },
     settings: { title: 'Settings', description: 'Manage your preferences and configuration' },
+    personas: { title: 'Personas', description: 'Per-provider and per-model custom system prompts' },
   }
 
   function handleOpenNewCombo() {
@@ -400,6 +402,8 @@
               <QuotaTrackerView {connections} />
             {:else if activeTab === 'token-saver'}
               <TokenSaverView {settings} onRefresh={loadData} />
+            {:else if activeTab === 'personas'}
+              <PersonasView {settings} onRefresh={loadData} />
             {:else if activeTab === 'cli-tools'}
               <CliToolsView {apiKeys} onRefresh={loadData} />
             {:else if activeTab === 'media-embedding'}

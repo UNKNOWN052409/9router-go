@@ -1,0 +1,8 @@
+### Features
+
+- **personas**: add a configurable system-prompt / model-persona layer. A persona is a user-authored system prompt scoped to a provider (`deepseek`) or a single model (`deepseek/deepseek-reasoner`), stored in the settings blob under `personas`; a model-scoped entry outranks its provider-scoped one, and disabled or prompt-less entries are treated as absent. The prompt is injected into the request body after RTK/caveman/ponytail/adhd through the same deduping injector, so it lands in the right place for both OpenAI Chat Completions (`messages[0].role=system`) and Claude Messages (top-level `system` — a `role:"system"` message is rejected by the Anthropic API). Settings changes refresh the in-memory config immediately, no per-request database read; the dashboard gains a **Personas** tab with add/edit/remove/toggle per scope plus three presets (concise-coding, creative-writing, technical-research). Malformed entries in imported backup blobs are skipped rather than trusted, and plain-string prompts are accepted alongside full objects for hand-edited files.
+
+### Verification
+
+- `go test ./internal/handlers/shared/ ./internal/db/ ./internal/handlers/chat/ ./internal/handlers/oauth/ ./internal/providers/` — new table-driven tests cover `PersonaFor` precedence (model over provider, disabled/empty absent, wholesale replacement clears), settings parsing (full object, plain string, malformed skipped, absent key stays nil), and injection through `applyTokenSavers` (OpenAI format, Claude top-level system, no duplication on re-inject, unmatched provider and disabled persona are no-ops).
+- `cd web && bun run build` and `make vet-svelte` at the pinned baseline (83 errors, unchanged).
