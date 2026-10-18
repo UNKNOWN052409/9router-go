@@ -1327,6 +1327,25 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
+    "id": "nous",
+    "name": "Nous Research",
+    "category": "oauth",
+    "alias": "nous",
+    "color": "#7C3AED",
+    "icon": "psychology",
+    "website": "https://nousresearch.com",
+    "notice": {"apiKeyUrl":"https://portal.nousresearch.com/api-keys","signupUrl":"https://portal.nousresearch.com"},
+    "noAuth": false,
+    "authModes": ["oauth", "apikey"],
+    "priority": 65,
+    "modelsFetcher": {"url": "https://inference-api.nousresearch.com/v1/models", "type": "nous-free"},
+    "passthroughModels": true,
+    "serviceKinds": [
+      "llm",
+      "imageToText"
+    ]
+  },
+  {
     "id": "google-pse",
     "name": "Google PSE",
     "category": "apikey",
