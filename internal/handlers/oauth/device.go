@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"9router/proxy/internal/handlerutil"
-	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/proxy"
 )
 
 // deviceProviders lists providers supporting the device-code family.
@@ -22,6 +22,16 @@ import (
 var deviceProviders = []string{
 	"qoder", "qoder-cn", "kilocode", "grok-cli", "github", "kiro", "kimi", "kimi-coding",
 	"codebuddy-cn", "codebuddy-intl", "muse", "minimax-code", "minimax-code-global",
+	// Zai GLM Coding is not RFC 8628 device code — it is the ZCode CLI
+	// authorize-then-poll flow, which carries its own bearer between the two
+	// steps. It reuses this transport because the envelope it returns
+	// (device_code = flow id, verification_uri = authorize URL) is exactly what
+	// the dashboard's device modal already knows how to drive.
+	"glm",
+	// Nous Research is the textbook RFC 8628 provider: portal device endpoint,
+	// token endpoint, then an agent-key mint that yields the credential model
+	// traffic authenticates with.
+	"nous",
 }
 
 func deviceSupported(p string) bool {
@@ -202,6 +212,10 @@ func deviceStart(provider, region, startURL, authMethod string) (map[string]any,
 		return museStart()
 	case "minimax-code", "minimax-code-global":
 		return minimaxCodeStart(provider)
+	case "glm":
+		return glmStart()
+	case "nous":
+		return nousStart()
 	default:
 		return nil, fmt.Errorf("unsupported provider")
 	}
@@ -472,6 +486,10 @@ func devicePoll(provider, code string, session map[string]any) (deviceTokens, st
 		t, err = musePoll(code)
 	case "minimax-code", "minimax-code-global":
 		t, err = minimaxCodePoll(provider, code, session)
+	case "glm":
+		t, err = glmPoll(session, code)
+	case "nous":
+		t, err = nousPoll(code)
 	default:
 		return t, "error", "unsupported provider"
 	}
@@ -502,6 +520,7 @@ func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) sav
 		"qoder": "Qoder", "qoder-cn": "Qoder CN", "kilocode": "KiloCode", "grok-cli": "Grok CLI",
 		"github": "GitHub", "kiro": "Kiro", "kimi": "Kimi", "muse": "Muse",
 		"codebuddy-cn": "CodeBuddy", "codebuddy-intl": "CodeBuddy",
+		"glm": "Zai GLM Coding", "nous": "Nous Research",
 	}[provider])
 	id := provider + "-" + shortHash(t.access)
 	dataMap := map[string]any{"apiKey": t.access, "accessToken": t.access}
