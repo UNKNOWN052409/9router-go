@@ -96,6 +96,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "morph": "morph",
   "nanobanana": "nb",
   "nebius": "nebius",
+  "nous": "ns",
   "nvidia": "nvidia",
   "ollama": "ollama",
   "ollama-local": "ollama-local",

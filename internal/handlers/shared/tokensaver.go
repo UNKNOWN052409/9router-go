@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"strings"
 	"sync"
 
 	"9router/proxy/internal/db"
@@ -38,6 +39,7 @@ type TokenSaverConfig struct {
 	semanticCacheEnabled    bool
 	semanticCacheTTL        int
 	semanticCacheMaxEntries int
+	personas                map[string]db.PersonaSettings
 }
 
 // NewTokenSaverConfig creates config with initial values.
@@ -252,6 +254,48 @@ func (c *TokenSaverConfig) SetSemanticCache(v bool) {
 	c.semanticCacheEnabled = v
 }
 
+// PersonaFor returns the effective persona for a provider/model pair.
+// A model-scoped entry ("provider/model") outranks a provider-scoped one
+// ("provider"); disabled or empty entries yield ("", false) so the caller
+// can treat them as absent. Safe to call on the request path: it only takes
+// a read lock on an in-memory map that settings updates replace wholesale.
+func (c *TokenSaverConfig) PersonaFor(provider, model string) (db.PersonaSettings, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.personas) == 0 {
+		return db.PersonaSettings{}, false
+	}
+	if model != "" {
+		if p, ok := c.personas[provider+"/"+model]; ok && p.Enabled && strings.TrimSpace(p.SystemPrompt) != "" {
+			return p, true
+		}
+	}
+	if p, ok := c.personas[provider]; ok && p.Enabled && strings.TrimSpace(p.SystemPrompt) != "" {
+		return p, true
+	}
+	return db.PersonaSettings{}, false
+}
+
+// Personas returns a defensive copy of the current persona map for the
+// dashboard diagnostic view.
+func (c *TokenSaverConfig) Personas() map[string]db.PersonaSettings {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]db.PersonaSettings, len(c.personas))
+	for k, v := range c.personas {
+		out[k] = v
+	}
+	return out
+}
+
+// SetPersonas atomically replaces the persona map. Used by settings updates
+// and by the startup loader; nil clears everything.
+func (c *TokenSaverConfig) SetPersonas(p map[string]db.PersonaSettings) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.personas = p
+}
+
 // Snapshot returns all current values.
 func (c *TokenSaverConfig) Snapshot() (rtk, caveman, ponytail bool) {
 	c.mu.RLock()
@@ -382,6 +426,9 @@ func (c *TokenSaverConfig) UpdateFromSettings(s *db.SettingsData) {
 	}
 	if s.SemanticCacheMaxEntries > 0 {
 		c.semanticCacheMaxEntries = s.SemanticCacheMaxEntries
+	}
+	if s.Personas != nil {
+		c.personas = s.Personas
 	}
 }
 

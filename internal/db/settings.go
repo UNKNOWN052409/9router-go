@@ -44,6 +44,17 @@ type CapacityAdapterEntry struct {
 	Models     []string `json:"models"`
 }
 
+// PersonaSettings is one custom system-prompt persona. Keys in the
+// `personas` settings map are either a provider id ("opencode") or a
+// provider/model pair ("opencode/mimo-v2.6-flash-free"); the model-scoped
+// entry wins over the provider-scoped one for matching traffic.
+type PersonaSettings struct {
+	Name         string `json:"name,omitempty"`
+	Description  string `json:"description,omitempty"`
+	SystemPrompt string `json:"systemPrompt,omitempty"`
+	Enabled      bool   `json:"enabled"`
+}
+
 // SettingsData represents token saver, combo routing, and general settings stored in the settings table.
 type SettingsData struct {
 	RTKEnabled                 bool                            `json:"rtkEnabled"`
@@ -86,6 +97,7 @@ type SettingsData struct {
 	ProviderStrategies         map[string]ProviderStrategy     `json:"providerStrategies,omitempty"`
 	CapacityAdapter            map[string]CapacityAdapterEntry `json:"capacityAdapter,omitempty"`
 	ProviderOverrides          map[string]ProviderOverrides    `json:"providerOverrides,omitempty"`
+	Personas                   map[string]PersonaSettings      `json:"personas,omitempty"`
 	EnableObservability        bool                            `json:"enableObservability"`
 	ObservabilityMode          string                          `json:"observabilityMode,omitempty"`
 	RetentionDays              int                             `json:"retentionDays,omitempty"`
@@ -395,6 +407,30 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 				continue
 			}
 			s.ProviderOverrides[k] = ProviderOverrides{Headers: stringMap(entry["headers"])}
+		}
+	}
+
+	// Per-provider / per-model custom system-prompt personas. A model-scoped
+	// key ("provider/model") or provider-scoped key ("provider") either full
+	// object or a plain string system prompt is accepted, so hand-edited
+	// backup blobs keep working; malformed entries are skipped.
+	if ps, ok := raw["personas"].(map[string]any); ok {
+		s.Personas = make(map[string]PersonaSettings, len(ps))
+		for k, v := range ps {
+			switch pv := v.(type) {
+			case map[string]any:
+				p := PersonaSettings{
+					Name:        handlerutil.GetString(pv, "name"),
+					Description: handlerutil.GetString(pv, "description"),
+					SystemPrompt: handlerutil.GetString(pv, "systemPrompt"),
+				}
+				if en, ok := pv["enabled"].(bool); ok {
+					p.Enabled = en
+				}
+				s.Personas[k] = p
+			case string:
+				s.Personas[k] = PersonaSettings{SystemPrompt: pv, Enabled: true}
+			}
 		}
 	}
 

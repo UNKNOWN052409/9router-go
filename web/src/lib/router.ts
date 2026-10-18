@@ -6,6 +6,7 @@ export type ActiveTab =
   | 'analytics'
   | 'quota'
   | 'token-saver'
+  | 'personas'
 // Cache Analytics and Compression Analytics are sections of the Usage page
 // (issue #200), not sidebar destinations. They keep their own paths so a
 // section stays linkable and survives a reload.
@@ -36,6 +37,7 @@ export const TAB_ROUTES: Record<ActiveTab, string> = {
   analytics: '/dashboard/usage',
   quota: '/dashboard/quota',
   'token-saver': '/dashboard/token-saver',
+  personas: '/dashboard/personas',
   'usage-cache': '/dashboard/usage/cache',
   'usage-compression': '/dashboard/usage/compression',
   'cli-tools': '/dashboard/cli-tools',
@@ -102,6 +104,10 @@ const ROUTE_TO_TAB: Record<string, ActiveTab> = {
   // token saver
   '/dashboard/token-saver': 'token-saver',
   '/token-saver': 'token-saver',
+
+  // personas
+  '/dashboard/personas': 'personas',
+  '/personas': 'personas',
 
   // cli-tools
   '/dashboard/cli-tools': 'cli-tools',
