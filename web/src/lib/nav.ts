@@ -71,6 +71,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { kind: 'link', id: 'analytics', label: 'Usage', icon: 'bar_chart' },
       { kind: 'link', id: 'quota', label: 'Quota Tracker', icon: 'data_usage' },
       { kind: 'link', id: 'token-saver', label: 'Token Saver', icon: 'savings' },
+      { kind: 'link', id: 'personas', label: 'Personas', icon: 'badge' },
       { kind: 'link', id: 'cli-tools', label: 'CLI Tools', icon: 'terminal' },
     ],
   },
