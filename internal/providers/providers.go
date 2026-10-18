@@ -626,7 +626,16 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthScheme: "bearer",
 	},
 	"glm": {
-		BaseURL:    "https://api.z.ai/api/coding/paas/v4/chat/completions",
+		BaseURL: "https://api.z.ai/api/coding/paas/v4/chat/completions",
+		// Coding-plan quota, readable with the same minted key. Upstream
+		// decolua/9router registry/glm.js transport.usage.
+		UsageURL:   "https://api.z.ai/api/monitor/usage/quota/limit",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+	},
+	"nous": {
+		BaseURL: "https://inference-api.nousresearch.com/v1/chat/completions",
+		// Upstream decolua/9router registry/nous.js transport.
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
