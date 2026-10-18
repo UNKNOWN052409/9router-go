@@ -5,6 +5,7 @@ export type ActiveTab =
   | 'combos'
   | 'analytics'
   | 'quota'
+  | 'provider-status'
   | 'token-saver'
 // Cache Analytics and Compression Analytics are sections of the Usage page
 // (issue #200), not sidebar destinations. They keep their own paths so a
@@ -35,6 +36,7 @@ export const TAB_ROUTES: Record<ActiveTab, string> = {
   combos: '/dashboard/combos',
   analytics: '/dashboard/usage',
   quota: '/dashboard/quota',
+  'provider-status': '/dashboard/provider-status',
   'token-saver': '/dashboard/token-saver',
   'usage-cache': '/dashboard/usage/cache',
   'usage-compression': '/dashboard/usage/compression',
@@ -98,6 +100,10 @@ const ROUTE_TO_TAB: Record<string, ActiveTab> = {
   // quota tracker
   '/dashboard/quota': 'quota',
   '/quota': 'quota',
+
+  // provider status
+  '/dashboard/provider-status': 'provider-status',
+  '/provider-status': 'provider-status',
 
   // token saver
   '/dashboard/token-saver': 'token-saver',
@@ -230,6 +236,9 @@ export function pathToTab(pathname: string): ActiveTab {
     return 'console-log'
   }
   if (normalized.includes('quota')) return 'quota'
+  // Before the 'providers' check below: /dashboard/provider-status contains
+  // "provider" but is a distinct tab from the connections page.
+  if (normalized.includes('provider-status')) return 'provider-status'
   if (normalized.includes('usage') || normalized.includes('analytics')) return 'analytics'
   if (normalized.includes('combos')) return 'combos'
   if (normalized.includes('providers') || normalized.includes('connections')) return 'connections'

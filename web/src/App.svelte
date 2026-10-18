@@ -24,6 +24,7 @@
   import ProfileSettingsView from './components/ProfileSettingsView.svelte'
   import MediaWebView from './components/media/MediaWebView.svelte'
   import QuotaTrackerView from './components/QuotaTrackerView.svelte'
+  import ProviderStatusView from './components/ProviderStatusView.svelte'
   import SkillsView from './components/SkillsView.svelte'
   import SettingsView from './components/SettingsView.svelte'
   import SecurityPanel from './components/security/SecurityPanel.svelte'
@@ -267,6 +268,10 @@
     'usage-compression': { title: 'Usage & Analytics', description: 'Monitor your API usage, token consumption, and request logs' },
     analytics: { title: 'Usage & Analytics', description: 'Monitor your API usage, token consumption, and request logs' },
     quota: { title: 'Quota Tracker', description: 'Track and manage your API quota limits' },
+    'provider-status': {
+      title: 'Provider Status',
+      description: 'Auth, status, models, quota and last real completion per provider',
+    },
     'token-saver': { title: 'Token Saver', description: 'Compress prompts and outputs to save tokens' },
     'cli-tools': { title: 'CLI Tools', description: 'Configure CLI tools and API keys' },
     'media-embedding': { title: 'Embedding Models', description: 'Vector embeddings and semantic retrieval' },
@@ -398,6 +403,8 @@
               <AnalyticsView {connections} {providerNodes} tab={activeTab} onNavigate={(next) => navigate(next)} />
             {:else if activeTab === 'quota'}
               <QuotaTrackerView {connections} />
+            {:else if activeTab === 'provider-status'}
+              <ProviderStatusView />
             {:else if activeTab === 'token-saver'}
               <TokenSaverView {settings} onRefresh={loadData} />
             {:else if activeTab === 'cli-tools'}

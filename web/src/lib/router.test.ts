@@ -21,6 +21,10 @@ describe('router', () => {
     expect(pathToTab('/dashboard/combos')).toBe('combos')
     expect(pathToTab('/dashboard/usage')).toBe('analytics')
     expect(pathToTab('/dashboard/quota')).toBe('quota')
+    // The path contains "provider", so this also pins the ordering: the
+    // connections branch below would otherwise swallow it.
+    expect(pathToTab('/dashboard/provider-status')).toBe('provider-status')
+    expect(pathToTab('/provider-status')).toBe('provider-status')
     expect(pathToTab('/dashboard/token-saver')).toBe('token-saver')
     expect(pathToTab('/dashboard/usage/cache')).toBe('usage-cache')
     expect(pathToTab('/dashboard/usage/compression')).toBe('usage-compression')

@@ -20,6 +20,7 @@ import (
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
+	"9router/proxy/internal/proxy/systemprompt"
 	"9router/proxy/internal/tokensaver"
 	"9router/proxy/internal/tracing"
 	"9router/proxy/internal/translator"
@@ -404,6 +405,32 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// Messages endpoint both answer in Claude, but only Anthropic's wants the
 	// beta query, the OAuth cloaking and the beta-flag merge below.
 	upstreamClaude := isAnthropic || servesClaudeMessages(provider, providerCfg)
+
+	// Sanitize and normalize the message list before anything else reads it.
+	//
+	// The pipeline is defined over the OpenAI Chat Completions shape — a
+	// `messages` array whose system instruction is a role:"system" message. A
+	// /v1/messages client is Claude-shaped instead: its system prompt lives in
+	// a top-level "system" field and the translator folds that into the first
+	// message when it converts to OpenAI. Running the pipeline on one would
+	// drop the client's own system prompt and replace it with ours, which
+	// silently changes what the caller asked for — so it is skipped there,
+	// and skipped for the same reason when the upstream is Claude-native.
+	if !messagesClient && !claudeNative {
+		body, err = h.applySystemPromptPipeline(body)
+		if err != nil {
+			return &upstreamError{
+				StatusCode: http.StatusBadRequest,
+				// UpstreamError carries a wire body rather than a message, so
+				// the refusal is shaped as the OpenAI error object a client
+				// already knows how to parse.
+				Body: []byte(fmt.Sprintf(
+					`{"error":{"message":%q,"type":"invalid_request_error","code":"system_prompt_invariant"}}`,
+					"request rejected by system-prompt pipeline: "+err.Error())),
+			}
+		}
+	}
+
 	compressStart := time.Now()
 	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
 	compressDurMs := int(time.Since(compressStart).Milliseconds())
@@ -917,6 +944,34 @@ func isClientCanceled(ctx context.Context, err error) bool {
 	}
 	errStr := err.Error()
 	return strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "client closed")
+}
+
+// applySystemPromptPipeline sanitizes the client's messages and installs
+// exactly one system message at index 0, then asserts that invariant.
+//
+// It refuses to forward a body it cannot account for. That is the point of
+// the check: if a future change to the translators or the token savers
+// introduces a second system message, forwarding it anyway would silently
+// change the model's behaviour for every request on the gateway, and the only
+// visible symptom would be answers nobody can reproduce. Failing here turns
+// that into a 400 with a log line naming the offending index.
+func (h *ChatHandler) applySystemPromptPipeline(body []byte) ([]byte, error) {
+	prompt := systemprompt.DefaultPrompt
+	if h.TokenSaver != nil && h.TokenSaver.SystemPromptEnabled() {
+		if p := h.TokenSaver.SystemPromptPrefix(); strings.TrimSpace(p) != "" {
+			prompt = p
+		}
+	}
+
+	next, err := systemprompt.Rewrite(body, prompt)
+	if err != nil {
+		return nil, err
+	}
+	if err := systemprompt.Verify(next); err != nil {
+		log.Error("pipeline", "system prompt invariant violated, refusing to forward", "error", err)
+		return nil, err
+	}
+	return next, nil
 }
 
 // applyTokenSavers runs RTK compression and prompt injection on the request body.

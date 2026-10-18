@@ -182,6 +182,34 @@ export interface ProviderStrategyConfig {
   [key: string]: unknown
 }
 
+/**
+ * Provider status, as served by GET /api/provider-status.
+ *
+ * `status` is deliberately three-valued and the client never fills it in
+ * locally: unavailable means the provider's docs name no usable endpoint or
+ * no credential is stored, configured means a /models call authenticated,
+ * and live-verified means a real completion returned text. Only the server's
+ * Test action can move a row to live-verified.
+ */
+export type ProviderStatusState = 'unavailable' | 'configured' | 'live-verified'
+
+export interface ProviderStatusRow {
+  id: string
+  auth: string[]
+  base_url: string | null
+  models_endpoint: string | null
+  chat_endpoint: string | null
+  quota_source: 'response_headers' | 'usage_endpoint' | 'unavailable'
+  status: ProviderStatusState
+  verified_at: string | null
+  notes: string
+  models_available: number
+  /** Rendered text. "unavailable" is a real value, not a zero. */
+  quota: string
+  verified_model?: string
+  latency_ms?: number
+}
+
 export interface Settings {
   requireApiKey?: boolean
   tunnelDashboardAccess?: boolean
@@ -1950,6 +1978,28 @@ export const api = {
       request<CompressionAnalyticsSummary>(
         `/api/analytics/compression?period=${encodeURIComponent(period)}`
       ),
+    // Provider status. `checkProviderKey` calls the provider's documented
+    // /models endpoint and may only mark a row configured; `smokeProvider`
+    // sends one real completion and is the only call that can mark a row
+    // live-verified. Both are named apart from api.validateProvider, which
+    // probes a key the operator is typing before saving it.
+    getProviderStatus: () =>
+      request<{ providers: ProviderStatusRow[] }>('/api/provider-status'),
+    checkProviderKey: (id: string) =>
+      request<{ id: string; status: ProviderStatusState; models_available?: number; message?: string }>(
+        `/api/provider-status/${encodeURIComponent(id)}/validate`,
+        { method: 'POST' }
+      ),
+    smokeProvider: (id: string) =>
+      request<{
+        id: string
+        status: ProviderStatusState
+        verified_at?: string | null
+        model?: string
+        latency_ms?: number
+        response_chars?: number
+        message?: string
+      }>(`/api/provider-status/${encodeURIComponent(id)}/smoke`, { method: 'POST' }),
   logout: async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })

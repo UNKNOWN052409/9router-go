@@ -151,6 +151,15 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/usage/{connectionId}/reset-credits", h.HandleListCodexResetCredits)
 		r.Post("/usage/{connectionId}/reset-credits/consume", h.HandleConsumeCodexResetCredit)
 
+		// Provider status: one row per provider carrying auth method, status,
+		// model count, quota and the last real completion. The two POSTs are
+		// the only ways a row's status changes — validate against the
+		// documented /models endpoint (configured), and smoke-test one real
+		// completion (live-verified).
+		r.Get("/provider-status", h.HandleProviderStatus)
+		r.Post("/provider-status/{id}/validate", h.HandleProviderValidate)
+		r.Post("/provider-status/{id}/smoke", h.HandleProviderSmoke)
+
 		// Cache Analytics & Management
 		r.Get("/cache", h.HandleGetCache)
 		r.Delete("/cache", h.HandleDeleteCache)

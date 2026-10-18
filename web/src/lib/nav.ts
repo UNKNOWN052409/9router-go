@@ -70,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { kind: 'link', id: 'combos', label: 'Combo & Vision Adapter', icon: 'layers' },
       { kind: 'link', id: 'analytics', label: 'Usage', icon: 'bar_chart' },
       { kind: 'link', id: 'quota', label: 'Quota Tracker', icon: 'data_usage' },
+      { kind: 'link', id: 'provider-status', label: 'Provider Status', icon: 'verified' },
       { kind: 'link', id: 'token-saver', label: 'Token Saver', icon: 'savings' },
       { kind: 'link', id: 'cli-tools', label: 'CLI Tools', icon: 'terminal' },
     ],
