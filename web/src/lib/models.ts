@@ -111,6 +111,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "poolside": "ps",
   "qoder": "qd",
   "qoder-cn": "qdcn",
+  "qwen": "qw",
   "recraft": "recraft",
   "runwayml": "runway",
   "sambanova": "samba",

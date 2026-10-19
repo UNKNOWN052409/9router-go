@@ -98,6 +98,7 @@ var ProviderAliasMap = map[string]string{
 	"pw":             "perplexity-web",
 	"qd":             "qoder",
 	"qdcn":           "qoder-cn",
+	"qw":             "qwen",
 	"runway":         "runwayml",
 	"stability":      "stability-ai",
 	"tg":             "together",

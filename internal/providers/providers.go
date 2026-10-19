@@ -659,10 +659,18 @@ var KnownProviders = map[string]ProviderConfig{
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
 	},
+	// MiniMax does not expose OpenAI-shaped media paths: /v1/images/generations
+	// and /v1/tts both answer 404 on either region (probed), while
+	// /v1/image_generation and /v1/t2a_v2 answer 200. Without these two the
+	// media handler derives the OpenAI path from BaseURL and every image and
+	// TTS request for this provider fails at the route, even though the
+	// catalog lists the provider as an image and TTS source.
 	"minimax": {
 		BaseURL:    "https://api.minimax.io/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		ImageURL:   "https://api.minimax.io/v1/image_generation",
+		TTSURL:     "https://api.minimax.io/v1/t2a_v2",
 	},
 	"kimi": {
 		BaseURL:    "https://api.kimi.com/coding/v1/chat/completions",
@@ -711,6 +719,10 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://api.minimaxi.com/v1/chat/completions",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+		// Same non-OpenAI media paths as the international region; only the
+		// host differs.
+		ImageURL: "https://api.minimaxi.com/v1/image_generation",
+		TTSURL:   "https://api.minimaxi.com/v1/t2a_v2",
 	},
 	// MiniMax Code (mcode) — the coding-subscription credits lane, served as a
 	// provider. Anthropic Messages on MiniMax's agent gateway, signed in with
@@ -1003,6 +1015,26 @@ var KnownProviders = map[string]ProviderConfig{
 		BaseURL:    "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
 		AuthHeader: "Authorization",
 		AuthScheme: "bearer",
+	},
+	// Qwen via Alibaba Cloud DashScope (the international region). Model list is
+	// discovered from the documented OpenAI-compatible /models endpoint rather
+	// than hardcoded here, so the catalog tracks whatever the account can
+	// actually reach.
+	//
+	// The international host is dashscope-intl.aliyuncs.com; the China region
+	// is dashscope.aliyuncs.com. A deployment picks one by overriding baseUrl
+	// on the connection, the way every other regional lane here does.
+	//
+	// Image generation is not an OpenAI-shaped path: /compatible-mode/v1/images
+	// /generations does not exist on DashScope, while
+	// /api/v1/services/aigc/text-to-image/generation does. Video is an
+	// asynchronous task (create then poll) and is deliberately not declared
+	// here — it needs its own executor, not a URL override.
+	"qwen": {
+		BaseURL:    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+		AuthHeader: "Authorization",
+		AuthScheme: "bearer",
+		ImageURL:   "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-to-image/generation",
 	},
 	// Qoder CN is a distinct deployment with its own gateway and credentials.
 	// It is never aliased onto qoder (AGENTS.md section 3.A).

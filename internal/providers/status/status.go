@@ -116,13 +116,13 @@ var entries = []*Entry{
 	{
 		ID:             "qwen",
 		Auth:           []string{AuthAPIKey},
-		BaseURL:        str("https://dashscope.aliyuncs.com/compatible-mode/v1"),
-		ModelsEndpoint: str("https://dashscope.aliyuncs.com/compatible-mode/v1/models"),
-		ChatEndpoint:   str("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
+		BaseURL:        str("https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+		ModelsEndpoint: str("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"),
+		ChatEndpoint:   str("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"),
 		QuotaSource:    QuotaNone,
 		Status:         Unavailable,
-		Notes: "OpenAI-compatible DashScope endpoint (international). The China " +
-			"region uses dashscope.aliyuncs.com; set it per deployment rather " +
+		Notes: "OpenAI-compatible DashScope endpoint (international region). The " +
+			"China region is dashscope.aliyuncs.com; set it per deployment rather " +
 			"than hardcoding a region. Qwen web chat is a browser session, not " +
 			"a documented OAuth grant, so no web auth flow is offered.",
 	},

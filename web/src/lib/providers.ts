@@ -419,6 +419,34 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     ]
   },
   {
+    // Qwen on Alibaba Cloud DashScope. The model list is discovered from the
+    // documented OpenAI-compatible /models endpoint rather than hardcoded, so
+    // the catalog reflects what the account can actually reach.
+    //
+    // Image generation is a DashScope-native path, not an OpenAI one. Video is
+    // an asynchronous task (create then poll) and is not listed here: it needs
+    // an executor, not a route, and offering it would advertise a capability
+    // the gateway cannot serve.
+    "id": "qwen",
+    "name": "Qwen (DashScope)",
+    "category": "apikey",
+    "alias": "qw",
+    "color": "#615CED",
+    "icon": "psychology",
+    "website": "https://dashscope-intl.aliyuncs.com",
+    "notice": {"text":"Alibaba Cloud Model Studio API key. The international region is dashscope-intl.aliyuncs.com; override the base URL on the connection for the China region (dashscope.aliyuncs.com).","apiKeyUrl":"https://bailian.console.alibabacloud.com/?apiKey=1"},
+    "noAuth": false,
+    "authModes": ["apikey"],
+    "priority": 145,
+    "passthroughModels": true,
+    "modelsFetcher": {"url":"https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models","type":"openai-compatible"},
+    "serviceKinds": [
+      "llm",
+      "image",
+      "imageToText"
+    ]
+  },
+  {
     "id": "xai",
     "name": "xAI (Grok)",
     "category": "oauth",

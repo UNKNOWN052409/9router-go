@@ -182,6 +182,28 @@ describe('providers & media separation', () => {
     assert.strictEqual(Boolean(p.modelsFetcher), true)
   })
 
+  it('wires Qwen end-to-end with live model discovery', () => {
+    const p = PROVIDER_CATALOG.find((e) => e.id === 'qwen')
+    assert.ok(p, 'qwen missing from the dashboard catalog')
+    assert.strictEqual(p.alias, 'qw')
+    assert.strictEqual(PROVIDER_ID_TO_ALIAS.qwen, 'qw')
+    // Models come from the documented /models endpoint, so nothing is
+    // hardcoded and the catalog tracks what the account can reach.
+    assert.strictEqual(p.passthroughModels, true)
+    assert.ok(p.modelsFetcher, 'qwen must declare a modelsFetcher')
+    assert.strictEqual(
+      getModelsByProviderId('qwen').length,
+      0,
+      'qwen must ship no static model list'
+    )
+    // Qwen's console login is a browser session, not a documented OAuth grant.
+    assert.deepStrictEqual(p.authModes, ['apikey'])
+    assert.ok(getProvidersByKind('image').some((e) => e.id === 'qwen'))
+    // Video on DashScope is an async create-then-poll task with no single
+    // POST endpoint; offering it would advertise what the gateway cannot do.
+    assert.strictEqual(getProvidersByKind('video').some((e) => e.id === 'qwen'), false)
+  })
+
   it('resolves every provider alias to a catalog with an entry', () => {
     const missing = Object.keys(PROVIDER_ID_TO_ALIAS).filter(
       (id) => !PROVIDER_CATALOG.some((p) => p.id === id || p.alias === id)

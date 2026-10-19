@@ -68,6 +68,7 @@ var RegistryAliases = map[string]string{
 	"poolside":          "ps",
 	"qoder":             "qd",
 	"qoder-cn":          "qdcn",
+	"qwen":              "qw",
 	"runwayml":          "runway",
 	"sambanova":         "samba",
 	"stability-ai":      "stability",
