@@ -84,76 +84,60 @@ Each request is thus a brand-new project → brand-new quota bucket. No IP
 change is needed for a reset; IP rotation is only relevant for transient
 upstream failures (see below).
 
-## Router integration (verified 2026-10-27)
+## Router integration (verified 2026-10-27/28)
 
-There are **two routers** on this machine and both now reach the reset shim:
+**Final form — the built-in `opencode` no-auth provider is wired to the reset
+shim on BOTH routers. No custom providers (`oc-fresh` removed), no model
+aliases, no extra prefixes: clients use `oc/<model>` (or `ocz2/<model>` on
+paths where that legacy wiring is still present) against their existing
+endpoint and key.**
 
-| Path | Router | Free models | Status |
+| Path | Router | Free-model names | How |
 |---|---|---|---|
-| `127.0.0.1:20130` → ZCode tool-shim → **node 9router (20128)** | Node 9router | `ocz2/<model>` | ✅ wired (live config), 5/5 battery + tools verified |
-| `[::1]:20130` / LAN:20130 → **9router-go** (Go gateway) | 9router-go | `ocz2/<model>`, bare `<model>` via aliases | ✅ wired in `db/data.sqlite`, battery + tools verified |
+| `127.0.0.1:20130` (user path) | ZCode tool-shim → **node 9router (20128)** | `oc/<model>` | compiled provider registry patched: `transport.baseUrl → http://127.0.0.1:20142` |
+| `[::1]:20130` / LAN:20130 | **9router-go** (Go gateway) | `oc/<model>` | `OPENCODE_FREE_BASEURL` env in the start script (custom build) |
 
-**Which lane hits limits:** the `ocz/*` prefix is the **opencode-zen keyed
-lane** — upstream rejects free models on it (`429 FreeUsageLimitError`
-"Free models work in OpenCode") regardless of key, because the free tier is
-client-fingerprint gated: only a real opencode CLI run is eligible; any
-synthesized HTTP request lands in a permanent 429 bucket (verified by direct
-probes with a perfect header set). The reset therefore **requires spawning
-the real CLI** — which is exactly what this shim does. The **no-auth CLI
-itself needs no key** (`OPENCODE_API_KEY` removed → still works).
+(The `oc/` request URL is built as `${baseUrl}/inference/v1/chat/completions`,
+which is exactly the shim's route. Patch script:
+`patch-node9router-oc.js` — targets only the `opencode` provider's
+`transport.baseUrl` inside chunk `1892.js`; backup at
+`D:/scratch/chunk-1892-backup.js`. Re-apply after any 9router npm upgrade.)
 
-### Go gateway wiring (db/data.sqlite)
+Verified on the user path (2026-10-28): `oc/glm-5.3-flash-free` 5/5 battery,
+**zero limit errors, avg 3.8 s/request**, tool calling (`get_weather{"city":"Pune"}`)
+— through the persistent `opencode serve` fast path.
 
-1. `providerNodes` row: name `oc-fresh`, prefix `ocz2`,
-   `baseUrl = http://127.0.0.1:20142/v1`, `apiType = chat`
-2. `providerConnections` row: name `oc-fresh-shim`, `provider` = the node's
-   id, `data.apiKey = sk-oc-fresh-shim-local` (any non-empty value; the shim
-   ignores auth), `isActive = 1`
-3. `kv` `modelAliases` rows: bare `<model>` and `opencode/<model>` →
-   `ocz2/<model>` for all six free models (prefix routing beats aliases, so
-   `ocz/*` cannot be aliased — bare names and `ocz2/*` are the reset paths)
-4. Gateway restart.
+### Why the reset needs the real CLI (proven, not assumed)
 
-**Known gotchas (both hit and fixed today):**
-- A hand-inserted `opencode-zen` connection row with a non-canonical data
-  shape breaks the gateway's connection loader (subsequent connections silently
-  don't load → "No active credentials for provider: ocz2"). Keep the zen-key
-  row disabled unless it is written by the gateway itself.
-- The zen-key account has no upstream funds (paid models answer
-  `402 Insufficient account funds`), so the zen lane is left disabled —
-  no functional loss. The shim also has a hardened `/zen/v1/*` pass-through
-  (constant https host allowlist, header allowlist) should the keyed lane be
-  re-enabled through it.
-- The node 9router (20128) holds its `ocz2` wiring in **live memory** — its
-  on-disk `db.json` predates it. If that router restarts and drops the
-  models, re-add the shim provider through its dashboard pointing at
-  `http://127.0.0.1:20142/v1`.
+The free tier is client-fingerprint gated: synthesized HTTP requests land in
+a permanent 429 bucket even with a perfect header set (direct probes done).
+Only a real opencode CLI run is eligible, and the no-auth CLI needs no key
+(`OPENCODE_API_KEY` removed → still works). Hence: routers → this shim →
+real CLI, fresh session per request.
 
-### Stability & latency
+### Known gotchas
 
-`oc-chain-watchdog.ps1` (scheduled task, every 2 min, launched hidden via
-`oc-chain-watchdog-hidden.vbs` so no console windows flash): keeps exactly one
-shim + one worker alive, kills duplicates (duplicate workers share the run-dir
+- A hand-inserted `opencode-zen` connection row in the Go gateway sqlite
+  breaks its connection loader (later connections silently don't load →
+  "No active credentials"). Keep it disabled; the zen-key account has no
+  upstream funds anyway (402). The shim carries a hardened `/zen/v1/*`
+  pass-through if the keyed lane is ever re-enabled through it.
+- The node 9router patch lives in `node_modules` — an npm upgrade of the
+  `9router` package reverts it; re-run the patch script and restart.
+- Latency: persistent `opencode serve` fast path (port 20193, hidden) with a
+  fresh session per request — 3–7 s typical; any fast-path failure falls back
+  to the original per-request spawn path. Serve is pre-warmed at worker
+  startup so the first request never trips the gateway's 30 s timeout.
+
+### Stability & one-command boot
+
+`oc-chain-watchdog.ps1` (scheduled task every 2 min, launched hidden via
+`oc-chain-watchdog-hidden.vbs` — no console flicker) keeps exactly one shim +
+one worker alive and kills duplicates (duplicate workers share the run-dir
 counter and delete each other's directories — a real incident).
 
-**One-command boot**: `start-9router-go-rotation.cmd` now also ensures the
-shim + worker before the gateway starts — starting 9router-go brings the whole
-free-model lane up.
-
-**Latency** (simple request, through the gateway):
-
-| Mode | Latency |
-|---|---|
-| per-request CLI spawn (old) | 8.5–13 s |
-| persistent `opencode serve` fast path (current) | **3–7 s**, first request after boot ~30 s while the serve boots |
-
-The worker runs a persistent `opencode serve` (port 20193, hidden) and talks
-to it over HTTP with a **fresh session per request** (same fresh-bucket
-semantics as a fresh directory — verified 6/6 zero-429). Any fast-path failure
-(serve down, upstream error, limit) automatically falls back to the original
-per-request spawn path, so behaviour never regresses. The serve is pre-warmed
-at worker startup so the first request doesn't trip the gateway's 30 s
-response timeout.
+`start-9router-go-rotation.cmd` ensures the shim + worker before starting the
+gateway: **one command boots the whole free-model lane.**
 
 Verified through the gateway (2026-10-27): per-model battery — glm ✅,
 mimo ✅, deepseek-v4.1 ✅ (197 s, slow but correct), tool calling via mimo ✅,
