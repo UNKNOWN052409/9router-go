@@ -36,10 +36,10 @@ clients keep using their existing endpoint and keys.
 
 ## Quick start (three commands)
 
-Requirements: Windows, Node.js ≥ 18, and the opencode CLI installed and
-logged in to the free tier (`npm install -g opencode-ai` then
-`opencode auth login`). Version `opencode-ai@1.18.35` was used for every
-test in this repo.
+Requirements: Windows (or Linux/macOS), Node.js ≥ 18. The opencode CLI is
+auto-installed if missing — **no login, no account, no API key is needed**;
+the free tier works anonymously (verified on a completely fresh profile).
+Version `opencode-ai@1.18.35` was used for every test in this repo.
 
 ```cmd
 install.cmd     :: one-time: checks prerequisites, creates dirs, registers the hidden watchdog
@@ -108,9 +108,9 @@ upstream failures (see below).
 
 ## Bring your own credentials — nothing bundled, nothing leaked
 
-This project ships **no API keys, no proxies, no accounts**. Every user
-brings their own opencode account (`opencode auth login` once) and, if they
-route through a gateway, their own gateway key. All machine-specific values
+This project ships **no API keys, no proxies, no accounts**. The free tier
+needs nothing from the user (it works anonymously); users who route through
+a gateway bring their own gateway key. All machine-specific values
 (binary location, data directory, home pin) are environment-overridable:
 `OPENCODE_BIN`, `OC_DATA_DIR`, `OC_HOME`, `N9R_HOME`.
 
@@ -176,8 +176,17 @@ Verified on the user path (2026-10-28): `oc/glm-5.3-flash-free` 5/5 battery,
 The free tier is client-fingerprint gated: synthesized HTTP requests land in
 a permanent 429 bucket even with a perfect header set (direct probes done).
 Only a real opencode CLI run is eligible, and the no-auth CLI needs no key
-(`OPENCODE_API_KEY` removed → still works). Hence: routers → this shim →
-real CLI, fresh session per request.
+and no login (`OPENCODE_API_KEY` removed + a completely fresh profile →
+still works, verified 2026-10-28). Hence: routers → this shim → real CLI,
+fresh session per request.
+
+**Tested 2026-10-28:** the gateway's native CLI-free stealth transport
+(BoringSSL client impersonation, present in the 9router-go source) was
+re-tested against the live upstream — it now answers `429
+FreeUsageLimitError` like any other synthesized client. The CLI-based lane
+is therefore not a design preference; it is the only working mechanism
+today. If upstream ever relaxes the gate, switching back to the native lane
+is a one-line env change.
 
 ### Known gotchas
 

@@ -26,12 +26,8 @@ if not exist "%OC_EXE%" (
     exit /b 1
 )
 echo [install] opencode CLI found.
-
-echo [install] checking opencode login (free tier)...
-"%OC_EXE%" providers list >nul 2>&1
-if errorlevel 1 (
-    echo [install] WARN: could not verify providers. Run: opencode auth login
-)
+echo [install] NOTE: no login, no account, no API key is needed — the free
+echo [install] tier works anonymously (verified with a completely fresh profile).
 
 echo [install] creating data directories...
 if not exist "D:\scratch\oc-cli-api\jobs"     mkdir "D:\scratch\oc-cli-api\jobs"

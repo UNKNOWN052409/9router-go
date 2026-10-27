@@ -23,9 +23,10 @@ else
   opencode --version 2>/dev/null || true
 fi
 
-echo "[install] IMPORTANT: bring your own account."
-echo "  Run once:  opencode auth login"
-echo "  (choose the free/no-auth tier; no key is bundled with this project)"
+echo "[install] IMPORTANT: zero login required."
+echo "  The free tier works anonymously — no account, no API key, no"
+echo "  'opencode auth login'. The binary alone is enough (verified on a"
+echo "  completely fresh profile)."
 
 DATA_DIR="${OC_DATA_DIR:-$HOME/.oc-free-tier-shim}"
 echo "[install] creating data directories at $DATA_DIR ..."
