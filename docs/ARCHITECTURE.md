@@ -53,7 +53,7 @@
 
 ### 3. opencode CLI (external, not in repo)
 
-`<user-profile>\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe`
+`<npm-global>\opencode-ai\bin\opencode.exe`
 (`opencode-ai@1.18.35`). Emits newline-delimited JSON events
 (`step_start`, `text`, `step_finish`, `error`). Auth comes from the logged-in
 profile via `HOME=<user-profile>`.

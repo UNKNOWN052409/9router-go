@@ -10,8 +10,17 @@
 // Scope: ONLY the opencode provider's transport.baseUrl. The identical string
 // inside other providers (zen/go URLs, systemoneConfig) is untouched.
 const fs = require("fs");
-const target = "<user-profile>/AppData/Roaming/npm/node_modules/9router/app/.next-cli-build/server/chunks/1892.js";
-const backup = "D:/scratch/chunk-1892-backup.js";
+const path = require("path");
+const os = require("os");
+
+// Target path is derived from the real user profile — works on any machine
+// with an npm global install of 9router; override with N9R_HOME if needed.
+const N9R_ROOT = process.env.N9R_HOME
+  || (process.platform === "win32"
+        ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "npm", "node_modules", "9router")
+        : path.join(os.homedir(), ".npm-global", "lib", "node_modules", "9router"));
+const target = path.join(N9R_ROOT, "app", ".next-cli-build", "server", "chunks", "1892.js");
+const backup = path.join(os.tmpdir(), "chunk-1892-backup.js");
 
 if (!fs.existsSync(backup)) {
   fs.copyFileSync(target, backup);

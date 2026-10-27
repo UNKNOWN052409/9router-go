@@ -30,8 +30,8 @@ if /i "%1"=="--with-router" (
         node "%DIR%\patch-node9router-oc.js"
         echo [start] node-9router oc/ lane patched if needed.
     )
-    if exist "<user-profile>\Music\api\rotation\start-9router-go-rotation.cmd" (
-        call "<user-profile>\Music\api\rotation\start-9router-go-rotation.cmd"
+    if exist "<9router-install>\rotation\start-9router-go-rotation.cmd" (
+        call "<9router-install>\rotation\start-9router-go-rotation.cmd"
     )
 )
 

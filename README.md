@@ -106,6 +106,48 @@ Each request is thus a brand-new project → brand-new quota bucket. No IP
 change is needed for a reset; IP rotation is only relevant for transient
 upstream failures (see below).
 
+## Bring your own credentials — nothing bundled, nothing leaked
+
+This project ships **no API keys, no proxies, no accounts**. Every user
+brings their own opencode account (`opencode auth login` once) and, if they
+route through a gateway, their own gateway key. All machine-specific values
+(binary location, data directory, home pin) are environment-overridable:
+`OPENCODE_BIN`, `OC_DATA_DIR`, `OC_HOME`, `N9R_HOME`.
+
+## Single reset mechanism
+
+There is exactly one reset mechanism in this project: **a fresh opencode
+session per request**. A fresh session gets a fresh quota bucket, so limits
+never surface in normal operation. If a limit response ever does appear
+(e.g. an upstream-side bucket change), the request automatically falls back
+to a brand-new CLI session and is retried by the worker's transient-error
+retry loop — the same mechanism, applied reactively. There is no second,
+parallel reset hack anywhere in the codebase.
+
+## No prefix required
+
+Model names work **with or without a provider prefix** when you call the
+shim directly: `glm-5.3-flash-free` and `opencode/glm-5.3-flash-free` are
+equivalent (known prefixes are stripped). Prefixes only matter when routing
+through a multi-provider router, and even there the router decides — this
+project adds no prefix requirement of its own.
+
+## Metrics
+
+`GET /v1/metrics` returns dependency-free JSON: request totals, ok/error/
+limit counts, per-model breakdown and latency percentiles (p50/p95). Scrape
+it from any monitoring stack; on low-resource hosts it costs nothing (an
+in-memory ring buffer, capped at 500 samples).
+
+## Low-resource deployments (Render, small VPS)
+
+Two processes total, zero npm dependencies, an in-memory job queue and a
+persistent serve that idles at near-zero CPU. The serve boots lazily and is
+reused for every request; the whole stack fits comfortably in a 512 MB
+container. Set `OC_DATA_DIR` to a persistent disk on hosting platforms so
+quota buckets and logs survive restarts.
+
+
 ## Router integration (verified 2026-10-27/28)
 
 **Final form — the built-in `opencode` no-auth provider is wired to the reset
@@ -177,7 +219,7 @@ because each request spawns a real CLI session.
   CLI returns a transient error (`Invalid API key`, `FreeUsageLimit`, `429`,
   `timeout`, `rate`). A new CLI session gets a new exit IP. Successful
   requests never rotate anything — no rotation-per-request behaviour.
-- **Gateway sidecar** (`<user-profile>\Music\api\rotation\rotation_daemon.py`):
+- **Gateway sidecar** (`<9router-install>\rotation\rotation_daemon.py`):
   rotating CONNECT proxy (Tor lanes) on `127.0.0.1:9191`, rotating per request
   **on proxy-egress calls only**.
 - **Known gap (honest status)**: the 9router `db.json` currently has
@@ -236,7 +278,9 @@ scripts/oc-cli-api.js      HTTP shim (port 20142, 127.0.0.1 only)
 scripts/oc-cli-worker.js   file-queue job runner (fresh dir/session per job)
 tests/smoke.mjs            end-to-end test battery (needs the live chain)
 tests/unit.test.mjs        pure-function unit tests (CI-safe, no network)
-install/start/stop.cmd     one-command lifecycle (hidden windows)
+install/start/stop.cmd     Windows lifecycle (hidden windows)
+install/start/stop.sh      Linux/macOS lifecycle (Render, VPS — auto-installs opencode)
+scripts/patch-node9router-oc.js  wires the built-in oc/ lane to the shim (idempotent)
 .github/workflows/ci.yml   GitHub Actions: syntax checks + unit tests
 docs/ARCHITECTURE.md       component detail + data flow + safety model
 docs/OPERATIONS.md         run, restart, logs, troubleshooting
