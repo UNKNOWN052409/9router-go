@@ -129,11 +129,31 @@ itself needs no key** (`OPENCODE_API_KEY` removed → still works).
   models, re-add the shim provider through its dashboard pointing at
   `http://127.0.0.1:20142/v1`.
 
-### Stability
+### Stability & latency
 
-`oc-chain-watchdog.ps1` (scheduled task, every 2 min): keeps exactly one
+`oc-chain-watchdog.ps1` (scheduled task, every 2 min, launched hidden via
+`oc-chain-watchdog-hidden.vbs` so no console windows flash): keeps exactly one
 shim + one worker alive, kills duplicates (duplicate workers share the run-dir
 counter and delete each other's directories — a real incident).
+
+**One-command boot**: `start-9router-go-rotation.cmd` now also ensures the
+shim + worker before the gateway starts — starting 9router-go brings the whole
+free-model lane up.
+
+**Latency** (simple request, through the gateway):
+
+| Mode | Latency |
+|---|---|
+| per-request CLI spawn (old) | 8.5–13 s |
+| persistent `opencode serve` fast path (current) | **3–7 s**, first request after boot ~30 s while the serve boots |
+
+The worker runs a persistent `opencode serve` (port 20193, hidden) and talks
+to it over HTTP with a **fresh session per request** (same fresh-bucket
+semantics as a fresh directory — verified 6/6 zero-429). Any fast-path failure
+(serve down, upstream error, limit) automatically falls back to the original
+per-request spawn path, so behaviour never regresses. The serve is pre-warmed
+at worker startup so the first request doesn't trip the gateway's 30 s
+response timeout.
 
 Verified through the gateway (2026-10-27): per-model battery — glm ✅,
 mimo ✅, deepseek-v4.1 ✅ (197 s, slow but correct), tool calling via mimo ✅,

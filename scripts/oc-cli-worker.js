@@ -108,7 +108,81 @@ function runDirFor(name) {
   return target.startsWith(root) ? target : null;
 }
 
+// ---------------------------------------------------------------------------
+// Fast path: persistent opencode serve (HTTP) with per-request fresh sessions.
+// Measured 4.4s vs 8.5s spawn latency; same fresh-bucket semantics (a new
+// session gets a new quota bucket). Every failure falls back to the spawn path.
+// ---------------------------------------------------------------------------
+const OC_SERVE_PORT = 20193;
+const OC_SERVE = "http://127.0.0.1:" + OC_SERVE_PORT;
+let serveProc = null;
+let serveBooting = null;
+
+function serveUp() {
+  if (serveProc && !serveProc.killed) return Promise.resolve(true);
+  if (serveBooting) return serveBooting;
+  serveBooting = new Promise((resolve) => {
+    serveProc = spawn(OC_EXE, ["serve", "--port", String(OC_SERVE_PORT), "--hostname", "127.0.0.1"], { windowsHide: true, stdio: "ignore", detached: false });
+    serveProc.on("error", () => { serveProc = null; serveBooting = null; resolve(false); });
+    serveProc.on("exit", () => { serveProc = null; serveBooting = null; resolve(false); });
+    let tries = 0;
+    const ping = setInterval(() => {
+      fetch(OC_SERVE + "/doc").then((r) => { if (r.ok) { clearInterval(ping); resolve(true); } }).catch(() => {});
+      if (++tries > 40) { clearInterval(ping); serveBooting = null; resolve(false); }
+    }, 250);
+  });
+  return serveBooting;
+}
+
+function serveModelId(model) {
+  return { providerID: "opencode", modelID: model };
+}
+
+async function serveChat(prompt, model, files, onPartial) {
+  const ok = await serveUp();
+  if (!ok) return null; // fall back to spawn
+  const session = await fetch(OC_SERVE + "/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) }).then((r) => r.ok ? r.json() : null).catch(() => null);
+  if (!session || !session.id) return null;
+  const parts = [{ type: "text", text: String(prompt || "hello") }];
+  // Stage attachments exactly like the spawn path and reference them as file
+  // parts; the serve process has file tools and reads them itself.
+  let attachCount = Math.floor(Number(files));
+  if (!Number.isFinite(attachCount) || attachCount < 0) attachCount = 0;
+  if (attachCount > 4) attachCount = 4;
+  for (let i = 1; i <= attachCount; i++) {
+    for (const ext of ATTACH_EXTS) {
+      const src = path.join(ATTACH_SRC_DIR, "attachment-" + i + "." + ext);
+      if (!fs.existsSync(src)) continue;
+      parts.push({ type: "file", url: src });
+      break;
+    }
+  }
+  const resp = await fetch(OC_SERVE + "/session/" + session.id + "/message", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: serveModelId(model), parts }) }).catch(() => null);
+  if (!resp || !resp.ok) return null;
+  const out = await resp.json().catch(() => null);
+  if (!out || !Array.isArray(out.parts)) return null;
+  let text = "";
+  for (const p of out.parts) {
+    if (p && p.type === "text" && p.text) {
+      text += p.text;
+      if (onPartial) { try { onPartial(p.text); } catch (_) {} }
+    }
+  }
+  const blob = JSON.stringify(out);
+  if (/FreeUsageLimit|429|Invalid API key|Unexpected server error/i.test(blob)) return null;
+  return { text, error: null };
+}
+
 function runJob(prompt, model, files, onPartial) {
+  // Fast path first; on any null result the spawn path below runs as before.
+  return serveChat(prompt, model, files, onPartial).then((fast) => {
+    if (fast) return fast;
+    return spawnRunJob(prompt, model, files, onPartial);
+  });
+}
+
+function spawnRunJob(prompt, model, files, onPartial) {
   return new Promise((resolve) => {
     runCounter = (runCounter + 1) % 100000;
     const runDir = runDirFor("r" + runCounter);
@@ -242,7 +316,7 @@ function handleJobFile(file) {
       if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
     }).then((result) => {
       const err = result.error || "";
-      const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate/i.test(err);
+      const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network/i.test(err);
       if (err && transient && n < 6) {
         log(base, "attempt " + n + " transient (" + err.slice(0, 500) + ") — retrying");
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
@@ -285,6 +359,9 @@ function main() {
   for (const k of ["SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "USERDOMAIN", "USERNAME"]) vals[k] = process.env[k] || "(MISSING)";
   log("env critical values:", JSON.stringify(vals));
   log("worker started; jobs dir", JOBS_DIR);
+  // Pre-warm the persistent opencode serve so the first request does not
+  // pay the boot cost (and never trips the gateway's 30s response timeout).
+  serveUp();
   setInterval(sweep, 700);
 }
 main();
