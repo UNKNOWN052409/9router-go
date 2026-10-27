@@ -80,6 +80,33 @@ Each request is thus a brand-new project → brand-new quota bucket. No IP
 change is needed for a reset; IP rotation is only relevant for transient
 upstream failures (see below).
 
+## 9router-go integration (verified 2026-10-27)
+
+The gateway (`9router-go`, port 20130) previously hit `429
+FreeUsageLimitError` on its `ocz/*` free models because its opencode-zen
+lane reuses one static upstream session. The fix: the gateway now routes
+free-model traffic **through this shim**, which performs the fresh-dir
+reset per request.
+
+Wiring (already applied to the live gateway DB
+`<user-profile>\AppData\Roaming\9router\db\data.sqlite`):
+
+1. `providerNodes` row: name `oc-fresh`, prefix `ocz2`,
+   `baseUrl = http://127.0.0.1:20142/v1`, `apiType = chat`
+2. `providerConnections` row: name `oc-fresh-shim`, `provider` = the node's
+   id, `data.apiKey = sk-oc-fresh-shim-local` (any non-empty value; the shim
+   ignores auth), `isActive = 1`
+3. Gateway restart to load both rows.
+
+Usage through the gateway: request model `ocz2/glm-5.3-flash-free`
+(the gateway strips the `ocz2/` prefix; the shim strips provider prefixes
+again). Direct `ocz/*` models on the gateway still use the old single-session
+lane and WILL hit limits — use `ocz2/*` for reset behaviour.
+
+Verified through the gateway with a real key: 5/5 sequential requests OK,
+fresh run dir per request, zero limit errors, tool calling works. Latency is
+higher (8–75 s) because each request spawns a real CLI session.
+
 ## IP rotation (as implemented, audited 2026-10-27)
 
 - **Worker**: retries a job up to 6 attempts, 2 s apart, **only** when the
@@ -109,6 +136,8 @@ Verified against the live chain (shim + worker + CLI):
 | 6 | Practical agentic workflow (folder + 2 files + node script + execute it) — GLM direct CLI | ✅ created `report/summary.md` and `count.js` (`console.log(42)`), output verified `42` |
 | 7 | DeepSeek v4.1 vision + file creation in one run (direct CLI) | ✅ correct colour + file written |
 | 8 | Context preservation with IDE-sized payload (339 tools + 41-turn history) | ✅ model answered from conversation context (`NIMBUS-ROCKET`) — regression test added after a real IDE incident |
+| 9 | **Through 9router-go gateway (port 20130)**: 5 sequential `ocz2/glm-5.3-flash-free` requests | ✅ 5/5 OK (8–75 s each), fresh run dir per request, **zero limit errors** — the gateway's own `ocz/*` lane 429s (`FreeUsageLimitError`) because it reuses one session; `ocz2/*` via this shim resets per request |
+| 10 | Tool calling through the gateway (`ocz2/…`) | ✅ model answered with weather tool flow |
 
 ### Known failures / limitations (not hidden)
 
@@ -127,9 +156,14 @@ Verified against the live chain (shim + worker + CLI):
 - GLM's colour answers on tiny images are occasionally wrong (said "White"
   for a blue 64×64 image once); DeepSeek answered correctly. Model-side
   quality issue.
-- An earlier `invalid_api_key` through the 9router gateway (port 20130) with
-  the public key was never resolved; all tests here bypass the gateway and
-  talk to the CLI directly.
+- An earlier `invalid_api_key` through the 9router gateway was a key-store
+  mix-up: `db.json` in `AppData\Roaming\9router` is the Node 9router's key
+  store, while the running Go gateway reads `db/data.sqlite` (same folder).
+  Keys like `<your-router-key>` (from the sqlite `apiKeys`
+  table) work. Resolved 2026-10-27.
+- The gateway's own `ocz/*` free-model lane hits `429 FreeUsageLimitError`
+  by design of its single-session opencode-zen connection. Use the `ocz2/*`
+  prefix (routed through this shim) for per-request reset behaviour.
 
 ## Layout
 
