@@ -98,14 +98,23 @@ Wiring (already applied to the live gateway DB
    ignores auth), `isActive = 1`
 3. Gateway restart to load both rows.
 
-Usage through the gateway: request model `ocz2/glm-5.3-flash-free`
-(the gateway strips the `ocz2/` prefix; the shim strips provider prefixes
-again). Direct `ocz/*` models on the gateway still use the old single-session
-lane and WILL hit limits — use `ocz2/*` for reset behaviour.
+Usage through the gateway: request model `ocz2/<model>` for any of the six
+supported free models — `glm-5.3-flash-free`, `mimo-v2.6-flash-free`,
+`deepseek-v4-flash-free`, `deepseek-v4.1-flash-free`,
+`muse-spark-1.3-contributor-free`, `jev-1.13-free` (the shim's `/v1/models`
+advertises all six; the gateway probes it and exposes each as `ocz2/…`).
+Direct `ocz/*` models on the gateway still use the old single-session lane
+and WILL hit limits — use `ocz2/*` for reset behaviour.
 
-Verified through the gateway with a real key: 5/5 sequential requests OK,
-fresh run dir per request, zero limit errors, tool calling works. Latency is
-higher (8–75 s) because each request spawns a real CLI session.
+Verified through the gateway (2026-10-27): per-model battery — glm ✅,
+mimo ✅, deepseek-v4.1 ✅ (197 s, slow but correct), tool calling via mimo ✅,
+5/5 stability battery with zero limit errors. `deepseek-v4-flash-free`,
+`muse-spark-1.3-contributor-free` and `jev-1.13-free` currently fail with
+upstream `Unexpected server error` **identically when called directly through
+the real CLI** — provider-side outage, not a routing or limit issue; they
+will work through this same route once upstream recovers (route already
+wired and advertised). Latency is higher than direct API calls (8–200 s)
+because each request spawns a real CLI session.
 
 ## IP rotation (as implemented, audited 2026-10-27)
 

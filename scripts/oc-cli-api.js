@@ -422,9 +422,19 @@ async function handleChat(res, body) {
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && /^\/v1\/models$/.test(req.url || "")) {
+    // Advertise every model the worker's literal argv table supports — the
+    // 9router-go gateway probes this list and exposes each as ocz2/<id>.
+    const MODELS = [
+      "glm-5.3-flash-free",
+      "mimo-v2.6-flash-free",
+      "deepseek-v4-flash-free",
+      "deepseek-v4.1-flash-free",
+      "muse-spark-1.3-contributor-free",
+      "jev-1.13-free",
+    ];
     return sendJson(res, 200, {
       object: "list",
-      data: [{ id: MODEL_ID, object: "model", owned_by: "opencode-free" }],
+      data: MODELS.map((m) => ({ id: m, object: "model", owned_by: "opencode-free" })),
     });
   }
   if (req.method === "POST" && /^\/(v1|inference\/v1)\/chat\/completions$/.test(req.url || "")) {
