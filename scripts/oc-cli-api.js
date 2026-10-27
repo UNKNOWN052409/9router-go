@@ -15,6 +15,7 @@
  * Binds 127.0.0.1 only.
  */
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
@@ -444,13 +445,58 @@ const server = http.createServer((req, res) => {
     req.on("end", () => { handleChat(res, Buffer.concat(chunks).toString("utf8")); });
     return;
   }
+  // Keyed zen lane pass-through: the gateway's opencode-zen connection
+  // points its base URL here so its FREE models get the fresh-session reset
+  // from this shim, while its PAID (zen-key) requests arrive as /zen/v1/...
+  // and are forwarded to the real upstream - same key header, same body,
+  // streamed both ways.
+  //
+  // SSRF-safe by construction: destination host/port/scheme are
+  // compile-time literals (https://opencode.ai:443). The request path must
+  // match the /zen/v1/ prefix and a strict character whitelist (no scheme
+  // switches, no userinfo, no double slashes). Only an explicit allowlist
+  // of header names is copied - caller headers cannot inject Host or
+  // override the destination.
+  if (/^\/zen\/v1\/[a-z0-9\/._-]*$/i.test(req.url || "")) {
+    const ZEN_HOST = "opencode.ai";
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("error", () => {});
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const headers = { host: ZEN_HOST };
+      const allow = ["content-type", "accept", "user-agent"];
+      // Upstream authenticates the keyed zen lane via Authorization: Bearer.
+      // The gateway sends the key as x-api-key (zenAuthHeaders); map it.
+      if (req.headers["x-api-key"]) headers["authorization"] = "Bearer " + req.headers["x-api-key"];
+      else if (req.headers["authorization"]) headers["authorization"] = req.headers["authorization"];
+      for (const name of allow) {
+        const v = req.headers[name];
+        if (v !== undefined) headers[name] = v;
+      }
+      const fwd = https.request({ host: ZEN_HOST, port: 443, path: req.url, method: req.method, headers }, (up) => {
+        res.writeHead(up.statusCode, up.headers);
+        up.pipe(res);
+      });
+      fwd.on("error", (e) => sendJson(res, 502, { error: { message: "zen upstream failed: " + String(e).slice(0, 120) } }));
+      fwd.end(body);
+      log("zen passthrough:", req.method, req.url, body.length + "b");
+    });
+    return;
+  }
   if (req.method === "GET" && /^\/health$/.test(req.url || "")) {
     return sendJson(res, 200, { ok: true, worker: "oc-cli-worker.js" });
   }
   sendJson(res, 404, { error: { message: "not found" } });
 });
 
-fs.mkdirSync(JOBS_DIR, { recursive: true });
-server.listen(PORT, HOST, () => {
-  log("oc-cli-api listening on http://" + HOST + ":" + PORT + "/v1 (file-queue front-end, model " + MODEL_ID + ")");
-});
+// Exports for unit tests (CI): pure functions only — no listeners started.
+module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, buildToolsProtocol };
+
+// Start the HTTP server only when run directly (not when required by tests).
+if (require.main === module) {
+  fs.mkdirSync(JOBS_DIR, { recursive: true });
+  server.listen(PORT, HOST, () => {
+    log("oc-cli-api listening on http://" + HOST + ":" + PORT + "/v1 (file-queue front-end, model " + MODEL_ID + ")");
+  });
+}

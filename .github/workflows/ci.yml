@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax-check all scripts
+        run: |
+          for f in scripts/*.js; do
+            node --check "$f"
+            echo "OK  $f"
+          done
+
+      - name: Unit tests (pure functions, no network)
+        env:
+          # The scripts read a few env vars at require time; provide neutral
+          # values so CI stays deterministic (no real key is ever needed).
+          OPENCODE_API_KEY: ci-placeholder
+          HOME: ${{ github.workspace }}
+        run: node tests/unit.test.mjs

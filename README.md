@@ -1,5 +1,7 @@
 # Nine Router Go Fork
 
+[![CI](https://github.com/UNKNOWN052409/9router-go/actions/workflows/ci.yml/badge.svg)](https://github.com/UNKNOWN052409/9router-go/actions/workflows/ci.yml)
+
 OpenAI-compatible HTTP API shim in front of the **opencode CLI**, giving any
 OpenAI-SDK client access to opencode's free-tier models (`glm-5.3-flash-free`,
 `deepseek-v4.1-flash-free`, `mimo-v2.6-flash-free`, …) with **fresh free-tier
@@ -32,27 +34,47 @@ opencode CLI  ──→  free-tier model (glm / deepseek / mimo …)
 The shim on 20142 is internal infrastructure (like any upstream provider) —
 clients keep using their existing endpoint and keys.
 
-## Quick start
+## Quick start (three commands)
 
-Requirements: Node.js ≥ 18, opencode CLI installed and logged in
-(`opencode-ai@1.18.35` was used for all tests in this repo).
+Requirements: Windows, Node.js ≥ 18, and the opencode CLI installed and
+logged in to the free tier (`npm install -g opencode-ai` then
+`opencode auth login`). Version `opencode-ai@1.18.35` was used for every
+test in this repo.
 
-```powershell
-# terminal 1 — worker
-node scripts\oc-cli-worker.js
-
-# terminal 2 — API shim
-node scripts\oc-cli-api.js
-
-# smoke test
-curl http://127.0.0.1:20142/health
-curl http://127.0.0.1:20142/v1/models
+```cmd
+install.cmd     :: one-time: checks prerequisites, creates dirs, registers the hidden watchdog
+start.cmd       :: starts the shim + worker (hidden). No proxy setup, no manual config
+stop.cmd        :: stops them
 ```
+
+Then use it like any OpenAI API — **nothing else to configure**:
 
 ```bash
 curl http://127.0.0.1:20142/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"glm-5.3-flash-free","messages":[{"role":"user","content":"Reply with OK"}]}'
+```
+
+Any OpenAI SDK works the same way (base URL `http://127.0.0.1:20142/v1`,
+any dummy API key, model ids: `glm-5.3-flash-free`, `mimo-v2.6-flash-free`,
+`deepseek-v4.1-flash-free`, `deepseek-v4-flash-free`,
+`muse-spark-1.3-contributor-free`, `jev-1.13-free`).
+
+### Using it through 9router (optional)
+
+If you route requests through 9router / 9router-go instead of calling the
+shim directly, run `start.cmd --with-router`. That applies the node-9router
+registry patch (idempotent — it skips if already applied) and starts your
+gateway. Clients then use their existing endpoint with the `oc/<model>`
+names, and those requests get the same fresh-session reset (see *Router
+integration* below). No proxy configuration is needed anywhere else —
+starting the stack is the only step.
+
+### Manual mode (if you prefer visible terminals)
+
+```powershell
+node scripts\oc-cli-worker.js    # terminal 1
+node scripts\oc-cli-api.js       # terminal 2
 ```
 
 ## API
@@ -212,7 +234,10 @@ Verified against the live chain (shim + worker + CLI):
 ```
 scripts/oc-cli-api.js      HTTP shim (port 20142, 127.0.0.1 only)
 scripts/oc-cli-worker.js   file-queue job runner (fresh dir/session per job)
-tests/smoke.mjs            end-to-end test battery (text / tools / vision / stream)
+tests/smoke.mjs            end-to-end test battery (needs the live chain)
+tests/unit.test.mjs        pure-function unit tests (CI-safe, no network)
+install/start/stop.cmd     one-command lifecycle (hidden windows)
+.github/workflows/ci.yml   GitHub Actions: syntax checks + unit tests
 docs/ARCHITECTURE.md       component detail + data flow + safety model
 docs/OPERATIONS.md         run, restart, logs, troubleshooting
 ```

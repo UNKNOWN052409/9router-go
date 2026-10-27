@@ -364,4 +364,10 @@ function main() {
   serveUp();
   setInterval(sweep, 700);
 }
-main();
+// Exports for unit tests (CI): pure functions only — no polling started.
+module.exports = { jobFilePath, partialPathFor, runDirFor, selectArgv, SAFE_ID, MODEL_RUN_ARGS, ATTACH_EXTS };
+
+// Start the job sweep only when run directly (not when required by tests).
+if (require.main === module) {
+  main();
+}
