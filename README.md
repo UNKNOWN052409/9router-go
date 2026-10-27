@@ -108,6 +108,7 @@ Verified against the live chain (shim + worker + CLI):
 | 5 | Streaming SSE | ✅ works; **one chunk per step** (the CLI emits one `text` event per step, not per token — that is an upstream CLI property, not a shim limitation) |
 | 6 | Practical agentic workflow (folder + 2 files + node script + execute it) — GLM direct CLI | ✅ created `report/summary.md` and `count.js` (`console.log(42)`), output verified `42` |
 | 7 | DeepSeek v4.1 vision + file creation in one run (direct CLI) | ✅ correct colour + file written |
+| 8 | Context preservation with IDE-sized payload (339 tools + 41-turn history) | ✅ model answered from conversation context (`NIMBUS-ROCKET`) — regression test added after a real IDE incident |
 
 ### Known failures / limitations (not hidden)
 
@@ -117,6 +118,12 @@ Verified against the live chain (shim + worker + CLI):
   a shim bug. `deepseek-v4.1-flash-free` works.
 - Streaming is step-granular (one SSE chunk per assistant step) because the
   CLI's `--format json` emits one `text` event per step.
+- **Fixed 2026-10-27**: the shim used to prepend the tool-protocol table and
+  truncate from the end at a 200k-char cap. OpenCode IDE sessions send 300+
+  tool definitions (~82k chars), so the user's actual conversation got
+  amputated and the model answered generically ("Hi, how can I help you?").
+  The budget now reserves room for the conversation first (cap raised to
+  600k); the tool table is what gets trimmed when the total is too large.
 - GLM's colour answers on tiny images are occasionally wrong (said "White"
   for a blue 64×64 image once); DeepSeek answered correctly. Model-side
   quality issue.

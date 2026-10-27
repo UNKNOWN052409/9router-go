@@ -25,7 +25,7 @@ const PARTIALS_DIR = path.resolve("D:\\scratch\\oc-cli-api\\partials");
 const MODEL_ID = "glm-5.3-flash-free";
 const WAIT_MS = 180000;
 const POLL_MS = 500;
-const MAX_PROMPT_CHARS = 200000;
+const MAX_PROMPT_CHARS = 600000;
 
 const LOG_FILE = path.resolve("D:\\scripts", "oc-cli-api.log");
 function log(...parts) {
@@ -219,7 +219,14 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths) {
     const refs = imagePaths.map((p) => "- " + p).join(String.fromCharCode(10));
     out += "\n\nAttached images (read and look at each of these files):\n\n" + refs;
   }
+  // Budget order matters: the CONVERSATION is the payload that must never
+  // be truncated. The tool table can be enormous (OpenCode IDE sends 300+
+  // tool definitions), so it is appended AFTER the conversation and gets
+  // trimmed first when the total exceeds the cap — the reverse order
+  // amputated the user's context and made the model answer generically.
   const proto = buildToolsProtocol(tools, toolChoice);
+  const budget = Math.max(MAX_PROMPT_CHARS - proto.length - 64, 4000);
+  if (out.length > budget) out = out.slice(0, budget) + "\n...[earlier context truncated]";
   if (proto) {
     out = proto + "\n\n" + out;
     // Repeat the mandate closest to the end — recency wins with agentic models.

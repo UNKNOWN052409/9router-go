@@ -117,6 +117,25 @@ function makePng() {
     report("limit reset (5x sequential)", ok === 5 && limitErrs === 0, ok + "/5 ok, limit errors: " + limitErrs);
   } catch (e) { report("limit reset (5x sequential)", false, String(e).slice(0, 60)); }
 
+  // 6. context preservation with an IDE-sized tool table (regression: the old
+  // shim prepended 339 tool defs and truncated from the end, amputating the
+  // conversation — the model then answered generically).
+  try {
+    const tools = [];
+    for (let i = 1; i <= 339; i++) {
+      tools.push({ type: "function", function: { name: "ide_tool_" + i, description: "Tool number " + i + " that does IDE thing " + i + " with several words of description text to inflate the payload size significantly.", parameters: { type: "object", properties: { path: { type: "string", description: "file path parameter with a longish explanation for size" }, content: { type: "string" } } } } });
+    }
+    const history = [];
+    for (let i = 1; i <= 20; i++) {
+      history.push({ role: "user", content: "Message " + i + ": we are working on the NIMBUS-ROCKET project deployment." });
+      history.push({ role: "assistant", content: "Understood, continuing with NIMBUS-ROCKET deployment step " + i + "." });
+    }
+    history.push({ role: "user", content: "What project are we working on? Answer with just the project name." });
+    const j = await chat({ model: "glm-5.3-flash-free", messages: history, tools });
+    const c = j.choices?.[0]?.message?.content || "";
+    report("context w/ 339 tools", /NIMBUS-ROCKET/i.test(c), c.slice(0, 40) || j.error?.message);
+  } catch (e) { report("context w/ 339 tools", false, String(e).slice(0, 60)); }
+
   console.log("\n" + results.filter(r => r.ok).length + "/" + results.length + " passed");
   process.exit(failed ? 1 : 0);
 })();
