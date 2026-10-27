@@ -18,17 +18,24 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const PORT = 20142;
 const HOST = "127.0.0.1";
-const JOBS_DIR = path.resolve("D:\\scratch\\oc-cli-api\\jobs");
-const PARTIALS_DIR = path.resolve("D:\\scratch\\oc-cli-api\\partials");
+// Data root matches the worker's derivation (OC_DATA_DIR env overrides);
+// keeping both sides on the same root is what makes the file-queue work.
+const DATA_ROOT = path.resolve(
+  process.env.OC_DATA_DIR ||
+  (process.platform === "win32" ? "D:\\scratch\\oc-cli-api" : path.join(os.homedir(), ".oc-free-tier-shim"))
+);
+const JOBS_DIR = path.join(DATA_ROOT, "jobs");
+const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
 const MODEL_ID = "glm-5.3-flash-free";
 const WAIT_MS = 180000;
 const POLL_MS = 500;
 const MAX_PROMPT_CHARS = 600000;
 
-const LOG_FILE = path.resolve("D:\\scripts", "oc-cli-api.log");
+const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
 function log(...parts) {
   const line = new Date().toISOString() + " " + parts.join(" ") + "\n";
   try { fs.appendFileSync(LOG_FILE, line); } catch (_) {}
@@ -50,7 +57,7 @@ function jobFilePath(name, suffix) {
 // under generated names; the prompt references those absolute paths and the
 // CLI (an agent with file-read tools) reads them itself — verified: "Describe
 // the image at <path>" makes glm describe the image correctly.
-const ATTACH_DIR = path.resolve("D:\\scratch\\oc-cli-api\\attachments");
+const ATTACH_DIR = path.join(DATA_ROOT, "attachments");
 // Per-request attachment index: files are named attachment-1..N so the
 // worker's staging loop (i = 1..attachCount) finds exactly this request's
 // files. A process-global growing counter would leak old indices into new
@@ -299,6 +306,7 @@ async function handleChat(res, body) {
   const stream = parsed.stream === true;
   const created = Math.floor(Date.now() / 1000);
   const id = "chatcmpl-occli-" + Date.now().toString(36);
+  const reqStart = Date.now();
   log("chat request, promptChars=" + prompt.length, stream ? "(stream)" : "", parsed.tools ? ("tools=" + parsed.tools.length) : "");
 
   let job;
@@ -374,6 +382,7 @@ async function handleChat(res, body) {
             }
             res.write("data: [DONE]\n\n");
             res.end();
+            recordMetrics(reqModel, Date.now() - reqStart, (result.error && !full) ? (/429|FreeUsageLimit|limit/i.test(result.error) ? "limit" : "error") : "ok");
             return;
           }
           if (Date.now() - start > WAIT_MS) {
@@ -381,6 +390,7 @@ async function handleChat(res, body) {
               choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + "\n\n");
             res.write("data: [DONE]\n\n");
             res.end();
+            recordMetrics(reqModel, Date.now() - reqStart, "error");
             return;
           }
           setTimeout(poll, 250);
@@ -397,6 +407,7 @@ async function handleChat(res, body) {
   const result = await waitForResult(job.id);
   const errText = result.error || "";
   const text = result.text || "";
+  recordMetrics(reqModel, Date.now() - reqStart, errText && !text ? (/429|FreeUsageLimit|limit/i.test(errText) ? "limit" : "error") : "ok");
   if (errText && !text) {
     sendJson(res, 502, { error: { message: errText, type: "upstream_error" } });
   } else {
@@ -421,7 +432,64 @@ async function handleChat(res, body) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Lightweight metrics: per-model request counts, errors, limit hits and
+// latency percentiles. Dependency-free, in-memory, bounded (500-sample ring).
+// Exposed at GET /v1/metrics so any deployment (Render, VPS, local) can
+// scrape it and watch performance without extra tooling.
+// ---------------------------------------------------------------------------
+const METRICS = {
+  startedAt: Date.now(),
+  total: 0, ok: 0, errors: 0, limitHits: 0,
+  byModel: new Map(),          // model -> { total, ok, errors, limitHits, latencies: [] }
+  ring: [],                    // recent latencies, capped
+  RING_CAP: 500,
+};
+
+function recordMetrics(model, ms, kind) {
+  // kind: "ok" | "error" | "limit"
+  METRICS.total++;
+  if (kind === "ok") METRICS.ok++;
+  else if (kind === "limit") { METRICS.errors++; METRICS.limitHits++; }
+  else METRICS.errors++;
+  let m = METRICS.byModel.get(model);
+  if (!m) { m = { total: 0, ok: 0, errors: 0, limitHits: 0, latencies: [] }; METRICS.byModel.set(model, m); }
+  m.total++;
+  m[kind === "ok" ? "ok" : (kind === "limit" ? "limitHits" : "errors")]++;
+  m.latencies.push(ms);
+  if (m.latencies.length > 200) m.latencies.shift();
+  METRICS.ring.push(ms);
+  if (METRICS.ring.length > METRICS.RING_CAP) METRICS.ring.shift();
+}
+
+function pct(sorted, p) {
+  if (!sorted.length) return 0;
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[idx];
+}
+
+function metricsSummary() {
+  const all = [...METRICS.ring].sort((a, b) => a - b);
+  const byModel = {};
+  for (const [model, m] of METRICS.byModel) {
+    const lat = [...m.latencies].sort((a, b) => a - b);
+    byModel[model] = {
+      total: m.total, ok: m.ok, errors: m.errors, limitHits: m.limitHits,
+      latencyMs: { avg: Math.round(lat.reduce((a, b) => a + b, 0) / (lat.length || 1)), p50: pct(lat, 50), p95: pct(lat, 95) },
+    };
+  }
+  return {
+    uptimeSec: Math.round((Date.now() - METRICS.startedAt) / 1000),
+    requests: { total: METRICS.total, ok: METRICS.ok, errors: METRICS.errors, limitHits: METRICS.limitHits },
+    latencyMs: { avg: Math.round(all.reduce((a, b) => a + b, 0) / (all.length || 1)), p50: pct(all, 50), p95: pct(all, 95) },
+    byModel,
+  };
+}
+
 const server = http.createServer((req, res) => {
+  if (req.method === "GET" && /^\/v1\/metrics$/.test(req.url || "")) {
+    return sendJson(res, 200, metricsSummary());
+  }
   if (req.method === "GET" && /^\/v1\/models$/.test(req.url || "")) {
     // Advertise every model the worker's literal argv table supports — the
     // 9router-go gateway probes this list and exposes each as ocz2/<id>.

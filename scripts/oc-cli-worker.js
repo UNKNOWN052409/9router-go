@@ -18,9 +18,17 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
-const JOBS_DIR = path.resolve("D:\\scratch\\oc-cli-api\\jobs");
-const PARTIALS_DIR = path.resolve("D:\\scratch\\oc-cli-api\\partials");
+// Data root is environment-overridable (OC_DATA_DIR) so the stack runs on any
+// machine/hostname without code edits. Defaults: Windows keeps the original
+// D:\scratch\oc-cli-api; other platforms use ~/.oc-free-tier-shim.
+const DATA_ROOT = path.resolve(
+  process.env.OC_DATA_DIR ||
+  (process.platform === "win32" ? "D:\\scratch\\oc-cli-api" : path.join(os.homedir(), ".oc-free-tier-shim"))
+);
+const JOBS_DIR = path.join(DATA_ROOT, "jobs");
+const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
 
 // Resolves a streaming-partial filename and refuses anything that escapes
 // the partials directory (same boundary rule as jobFilePath).
@@ -30,11 +38,17 @@ function partialPathFor(base) {
   const root = path.resolve(PARTIALS_DIR) + path.sep;
   return target.startsWith(root) ? target : null;
 }
-const OC_EXE = "C:\\Users\\Unkno\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe";
+// Binary resolution: OPENCODE_BIN env wins; then the standard Windows npm
+// global path (if present); otherwise assume "opencode" is on PATH
+// (Linux/macOS npm global install). No machine-specific paths required.
+const OC_EXE = process.env.OPENCODE_BIN
+  || (process.platform === "win32" && fs.existsSync(path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "npm", "node_modules", "opencode-ai", "bin", "opencode.exe"))
+        ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "npm", "node_modules", "opencode-ai", "bin", "opencode.exe")
+        : "opencode");
 // FRESH project directory per request: the free tier tracks usage per
 // project (directory-path-derived), so a brand-new path per run gives a
 // brand-new bucket every time — the folder-rename trick, automated.
-const WORK_ROOT = path.resolve("D:\\scratch\\oc-cli-api\\work");
+const WORK_ROOT = path.join(DATA_ROOT, "work");
 // The model is baked into RUN_ARGS (a literal): the run directories stay
 // config-free (an opencode.json in the cwd made the CLI hang/401).
 // Per-model constant args: the requested model is matched against these
@@ -229,7 +243,9 @@ const args = selectArgv(model).concat(attachArgs);
 // Prompt travels on STDIN as data — user input never touches argv. HOME
     // is pinned to the real profile — a PowerShell-inherited env can lack it,
     // and the CLI resolves its auth file through the home path.
-    const env = Object.assign({}, process.env, { HOME: "C:\\Users\\Unkno" });
+    // HOME pin: the CLI resolves its auth file through the home path. Use the
+    // actual user profile — never a hardcoded machine-specific path.
+    const env = Object.assign({}, process.env, { HOME: process.env.OC_HOME || (process.platform === "win32" ? (process.env.USERPROFILE || os.homedir()) : process.env.HOME) });
     const child = spawn(OC_EXE, args, { cwd: runDir, windowsHide: true, env: env });
     let buf = "";
     let text = "";
