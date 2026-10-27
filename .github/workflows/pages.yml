@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  administration: write
 
 concurrency:
   group: pages-${{ github.ref }}
@@ -83,6 +84,8 @@ jobs:
 
       - uses: actions/configure-pages@v5
         id: pages
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
