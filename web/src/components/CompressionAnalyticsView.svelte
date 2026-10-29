@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, type Snippet } from 'svelte'
+  import { onDestroy, type Snippet } from 'svelte'
   import {
     api,
     type CompressionAnalyticsSummary,
@@ -10,6 +10,9 @@
   import { periodLabel, type Period } from './analytics/types'
   import Menu from '../lib/ui/Menu.svelte'
   import MenuItem from '../lib/ui/MenuItem.svelte'
+  import { costIn, currentCurrency } from '../lib/currency.svelte'
+  import { convertFromUsd } from '../lib/currency'
+  import { isPanelVisible } from '../lib/usagePanel.svelte'
 
   interface Props {
     /**
@@ -31,6 +34,7 @@
   let stats = $state<CompressionAnalyticsSummary | null>(null)
   let autoRefresh = $state(false)
   let refreshTimer: ReturnType<typeof setInterval> | null = null
+  let hoveredTrendHour = $state<{ hour: string; count: number; tokensSaved: number } | null>(null)
 
   async function loadData() {
     loading = true
@@ -56,6 +60,8 @@
     notifications.success('Exported JSON successfully')
   }
 
+  // Cost columns in the CSV: EstUSD keeps the pre-existing USD cell, EstLocal
+  // adds the operator's display-currency conversion, Currency names its code.
   function exportCSV() {
     if (!stats) return
     const lines = ['Category,Key,Requests,TokensSaved,AvgSavingsPct']
@@ -70,9 +76,14 @@
     }
     if (stats.topSavers && stats.topSavers.length > 0) {
       lines.push('')
-      lines.push('TopSavers,RequestID,Timestamp,Provider,Model,Mode,OriginalTokens,CompressedTokens,TokensSaved,SavingsPct,DurationMs,EstUSD')
+      lines.push('TopSavers,RequestID,Timestamp,Provider,Model,Mode,OriginalTokens,CompressedTokens,TokensSaved,SavingsPct,DurationMs,EstUSD,EstLocal,Currency')
       for (const s of stats.topSavers) {
-        lines.push(`TopSaver,${s.requestId},${s.timestamp},${s.provider},${s.model},${s.mode},${s.originalTokens},${s.compressedTokens},${s.tokensSaved},${s.savingsPct}%,${s.durationMs}ms,$${s.estimatedUsd}`)
+        const currency = currentCurrency()
+        const local = convertFromUsd(s.estimatedUsd ?? 0, currency)
+        const estLocal = local === null ? '' : local.toFixed(4)
+        // The USD cell is the pre-existing `$`-prefixed number, unchanged here.
+        const usdCell = '$' + s.estimatedUsd
+        lines.push(`TopSaver,${s.requestId},${s.timestamp},${s.provider},${s.model},${s.mode},${s.originalTokens},${s.compressedTokens},${s.tokensSaved},${s.savingsPct}%,${s.durationMs}ms,${usdCell},${estLocal},${currency.code}`)
       }
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
@@ -85,7 +96,10 @@
     notifications.success('Exported CSV successfully')
   }
 
-  onMount(() => {
+  $effect(() => {
+    if (!isPanelVisible('compression.trend') && !isPanelVisible('compression.mode') && !isPanelVisible('compression.provider') && !isPanelVisible('compression.model') && !isPanelVisible('compression.topSavers') && !isPanelVisible('compression.receipts')) {
+      return
+    }
     loadData()
   })
 
@@ -306,7 +320,7 @@
       </div>
       <div class="mt-3">
         <div class="text-2xl font-bold text-emerald-500">
-          ${(stats?.realUsage?.estimatedUsdSaved ?? 0).toFixed(2)}
+          {costIn(stats?.realUsage?.estimatedUsdSaved ?? 0)}
         </div>
         <p class="text-xs text-text-subtle mt-1 truncate">Estimated USD saved</p>
       </div>
@@ -329,13 +343,33 @@
   </div>
 
   <!-- Hourly Trend Chart -->
+  {#if isPanelVisible('compression.trend')}
   <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm">
-    <div class="flex flex-col gap-1 mb-4">
-      <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
-        <span class="material-symbols-outlined text-[18px] text-brand-500">monitoring</span>
-        Hourly Token Savings Trend
-      </h3>
-      <p class="text-xs text-text-subtle">Tokens saved over recent hours.</p>
+    <div class="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div>
+        <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-[18px] text-brand-500">monitoring</span>
+          Hourly Token Savings Trend
+        </h3>
+        <p class="text-xs text-text-subtle">Tokens saved over recent hours.</p>
+      </div>
+
+      {#if hoveredTrendHour}
+        <div class="flex flex-wrap items-center gap-2.5 px-3 py-1.5 rounded-xl bg-surface-2 border border-border text-xs shadow-sm">
+          <span class="font-semibold text-text-muted flex items-center gap-1 font-mono text-[11px]">
+            <span class="material-symbols-outlined text-[14px]">schedule</span>
+            {hoveredTrendHour.hour.replace('T', ' ').replace(':00:00Z', ':00')}
+          </span>
+          <span class="text-border">|</span>
+          <span class="text-text-muted">Runs: <strong class="text-text-main font-mono">{hoveredTrendHour.count}</strong></span>
+          <span class="text-border">|</span>
+          <span class="text-emerald-500">Tokens Saved: <strong class="font-mono">{hoveredTrendHour.tokensSaved.toLocaleString()}</strong></span>
+        </div>
+      {:else}
+        <div class="text-[11px] text-text-subtle hidden sm:block">
+          Hover over any column to inspect hourly savings
+        </div>
+      {/if}
     </div>
 
     {#if trendUnavailable}
@@ -348,41 +382,35 @@
         No compression activity recorded in the {periodLabel(since).toLowerCase()}.
       </div>
     {:else}
-      <div class="h-44 w-full flex items-end gap-1.5 pt-4 overflow-x-auto">
+      <div class="h-48 w-full flex items-end gap-1.5 pt-4 pb-1 overflow-x-auto">
         {#each stats.trend as b}
           {@const heightPct = Math.max(8, Math.round((b.tokensSaved / maxTrendTokens) * 100))}
-          <div class="flex-1 min-w-[20px] h-full flex flex-col justify-end items-center group relative">
-            <!-- Tooltip -->
-            <div class="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center z-20 pointer-events-none">
-              <div class="rounded-lg bg-surface-3 border border-border p-2 text-[11px] shadow-lg whitespace-nowrap text-text-main">
-                <div class="font-semibold text-text-muted">{b.hour.replace('T', ' ').replace(':00:00Z', ':00')}</div>
-                <div class="mt-1 flex items-center justify-between gap-3">
-                  <span>Runs:</span> <span class="font-bold">{b.count}</span>
-                </div>
-                <div class="flex items-center justify-between gap-3 text-emerald-500">
-                  <span>Tokens Saved:</span> <span class="font-bold">{b.tokensSaved.toLocaleString()}</span>
-                </div>
-              </div>
-            </div>
-
+          {@const isHovered = hoveredTrendHour === b}
+          <div
+            class="flex-1 min-w-[22px] h-full flex flex-col justify-end items-center group relative cursor-pointer"
+            onmouseenter={() => (hoveredTrendHour = b)}
+            onmouseleave={() => (hoveredTrendHour = null)}
+          >
             <!-- Bar -->
             <div
-              class="w-full rounded-t transition-all duration-300 bg-emerald-500 hover:bg-emerald-400 cursor-pointer"
+              class="w-full rounded-t transition-all duration-200 bg-emerald-500 hover:bg-emerald-400 {isHovered ? 'ring-2 ring-brand-500 shadow-md brightness-110' : ''}"
               style="height: {heightPct}%"
             ></div>
           </div>
         {/each}
       </div>
-      <div class="flex items-center justify-between text-[11px] text-text-subtle mt-2 pt-2 border-t border-border-subtle">
+      <div class="flex flex-wrap items-center justify-between text-[11px] text-text-subtle mt-2 pt-2 border-t border-border-subtle gap-2">
         <span>Hourly Buckets</span>
         <span>Window: {since.toUpperCase()}</span>
       </div>
     {/if}
   </div>
+  {/if}
 
   <!-- Breakdown Grid: Modes, Providers, Models -->
   <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
     <!-- Breakdown by Mode -->
+    {#if isPanelVisible('compression.mode')}
     <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
       <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
@@ -400,7 +428,7 @@
         <div class="space-y-4">
           {#each modeList as m}
             <div class="space-y-1.5">
-              <div class="flex items-center justify-between text-xs">
+              <div class="flex flex-wrap items-center justify-between text-xs gap-1">
                 <span class="font-semibold text-text-main uppercase font-mono">{m.mode}</span>
                 <span class="text-text-muted">
                   <span class="text-text-main font-medium">{m.count}</span> runs •
@@ -424,8 +452,10 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <!-- Breakdown by Provider -->
+    {#if isPanelVisible('compression.provider')}
     <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
       <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
@@ -447,7 +477,7 @@
         <div class="space-y-4">
           {#each providerList as p}
             <div class="space-y-1.5">
-              <div class="flex items-center justify-between text-xs">
+              <div class="flex flex-wrap items-center justify-between text-xs gap-1">
                 <span class="font-semibold text-text-main flex items-center gap-2">
                   <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
                   {p.provider}
@@ -468,8 +498,10 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <!-- Breakdown by Model -->
+    {#if isPanelVisible('compression.model')}
     <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
       <div class="flex items-center justify-between">
         <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
@@ -491,7 +523,7 @@
         <div class="space-y-4">
           {#each modelList as m}
             <div class="space-y-1.5">
-              <div class="flex items-center justify-between text-xs">
+              <div class="flex flex-wrap items-center justify-between text-xs gap-1">
                 <span class="font-semibold text-text-main font-mono text-[11px] truncate max-w-[140px]" title={m.model}>
                   {m.model}
                 </span>
@@ -514,9 +546,11 @@
         </div>
       {/if}
     </div>
+    {/if}
   </div>
 
   <!-- Top 10 Biggest Savers Table -->
+  {#if isPanelVisible('compression.topSavers')}
   <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
     <div class="flex items-center justify-between">
       <div>
@@ -537,7 +571,7 @@
       </div>
     {:else}
       <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs">
+        <table class="w-full text-left text-xs min-w-[850px]">
           <thead>
             <tr class="border-b border-border text-text-muted">
               <th class="py-2.5 px-3 font-semibold">Request ID</th>
@@ -593,7 +627,7 @@
                   {s.durationMs}ms
                 </td>
                 <td class="py-2.5 px-3 text-right font-medium text-emerald-400">
-                  ${s.estimatedUsd.toFixed(3)}
+                  {costIn(s.estimatedUsd, 3)}
                 </td>
               </tr>
             {/each}
@@ -602,8 +636,10 @@
       </div>
     {/if}
   </div>
+  {/if}
 
   <!-- Real Usage Receipts & Telemetry Details -->
+  {#if isPanelVisible('compression.receipts')}
   <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm">
     <h3 class="text-sm font-semibold text-text-main mb-3 flex items-center gap-1.5">
       <span class="material-symbols-outlined text-[18px] text-brand-500">receipt_long</span>
@@ -637,4 +673,5 @@
       </div>
     </div>
   </div>
+  {/if}
 </div>

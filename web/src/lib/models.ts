@@ -18,6 +18,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "bai": "bai",
   "atria": "atria",
   "dahl": "dahl",
+  "daoxe": "dx",
   "sumopod": "sp",
   "tokenharbor": "tokenharbor",
   "alicode": "alicode",
@@ -92,6 +93,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "mistral": "mistral",
   "mmf": "mmf",
   "muse": "muse",
+  "nan": "nan",
   "tinyfish": "tinyfish",
   "morph": "morph",
   "nanobanana": "nb",
@@ -103,6 +105,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "opencode": "oc",
   "opencode-go": "ocg",
   "opencode-zen": "ocz",
+  "openadapter": "oad",
   "openrouter": "openrouter",
   "perplexity": "pplx",
   "perplexity-agent": "pa",
@@ -119,6 +122,7 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "selfhosted-stt": "selfhosted-stt",
   "selfhosted-tts": "selfhosted-tts",
   "siliconflow": "siliconflow",
+  "sensenova": "sensenova",
   "stability-ai": "stability",
   "tencent": "hunyuan",
   "together": "together",
@@ -137,6 +141,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "xiaomi-mimo": "mimo",
   "xiaomi-tokenplan": "xmtp",
   "zed": "zd",
+  "atmorouter": "atmo",
+  "runcrate": "rc",
 };
 
 const FREEBUFF_MODELS: ProviderModel[] = [
@@ -342,6 +348,26 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "gemini-3.5-flash-lite",
       "name": "Gemini 3.5 Flash Lite"
+    },
+    {
+      "id": "gemini-4-argon-high",
+      "name": "Gemini 4 Argon (High)",
+      "upstreamModelId": "gemini-4-argon-high(high)"
+    },
+    {
+      "id": "gemini-4-argon-medium",
+      "name": "Gemini 4 Argon (Medium)",
+      "upstreamModelId": "gemini-4-argon-medium(medium)"
+    },
+    {
+      "id": "gemini-4-argon-low",
+      "name": "Gemini 4 Argon (Low)",
+      "upstreamModelId": "gemini-4-argon-low(low)"
+    },
+    {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "upstreamModelId": "gemini-4-argon-medium(medium)"
     },
     {
       "id": "gemini-3.8-flash-high",
@@ -1004,9 +1030,17 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "deepseek-v4.1-flash",
       "name": "DeepSeek-V4.1-Flash"
+    },
+    {
+      "id": "kimi-k2.8-preview",
+      "name": "Kimi-K2.8-Preview"
     }
   ],
   "cx": [
+    {
+      "id": "transcribe",
+      "name": "Codex Transcription"
+    },
     {
       "id": "gpt-6.1-sol",
       "name": "GPT 6.1 Sol",
@@ -1082,15 +1116,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "upstreamModelId": "gpt-5.6-luna"
     },
     {
-      "id": "gpt-5.5",
-      "name": "GPT 5.5"
-    },
-    {
-      "id": "gpt-5.5-review",
-      "name": "GPT 5.5 Review",
-      "upstreamModelId": "gpt-5.5"
-    },
-    {
       "id": "gpt-daybreak-blue-latest",
       "name": "GPT Daybreak Blue"
     },
@@ -1134,14 +1159,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "gpt-5.6-luna-image",
       "name": "GPT 5.6 Luna Image"
-    },
-    {
-      "id": "gpt-5.5-image",
-      "name": "GPT 5.5 Image"
-    },
-    {
-      "id": "gpt-5.3-image",
-      "name": "GPT 5.3 Image"
     }
   ],
   "cohere": [
@@ -1525,6 +1542,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "DeepSeek V4 Flash"
     },
     {
+      "id": "moonshotai/Kimi-K3.1-Pro",
+      "name": "Kimi K3.1 Pro"
+    },
+    {
       "id": "moonshotai/Kimi-K2.7-Code",
       "name": "Kimi K2.7 Code"
     },
@@ -1720,6 +1741,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "deepseek-v4-flash-vision-exp",
       "name": "DeepSeek V4 Flash Vision (Exp)"
+    },
+    {
+      "id": "deepseek-flash",
+      "name": "DeepSeek Flash"
     },
     {
       "id": "deepseek-chat",
@@ -2070,6 +2095,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "gc": [
     {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon"
+    },
+    {
       "id": "gemini-3.1-pro-preview",
       "name": "Gemini 3.1 Pro Preview"
     },
@@ -2099,6 +2128,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "gemini": [
+    {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon"
+    },
     {
       "id": "gemini-3.8-flash",
       "name": "Gemini 3.8 Flash"
@@ -2218,6 +2251,18 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "stt"
     },
     {
+      "id": "gemini-2.5-flash-native-audio-preview-09-17",
+      "name": "Gemini Live Transcription (Realtime)",
+      "params": [
+        "language",
+        "prompt",
+        "system_instruction",
+        "setup_timeout_ms",
+        "turn_timeout_ms"
+      ],
+      "kind": "stt"
+    },
+    {
       "id": "gemini-3.1-flash-tts-preview",
       "name": "Gemini 3.1 Flash TTS",
       "kind": "tts"
@@ -2279,12 +2324,8 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "gh": [
     {
-      "id": "gpt-5.2",
-      "name": "GPT-5.2"
-    },
-    {
-      "id": "gpt-5.2-codex",
-      "name": "GPT-5.2 Codex"
+      "id": "gpt-5-mini",
+      "name": "GPT-5 Mini"
     },
     {
       "id": "gpt-5.3-codex",
@@ -2299,52 +2340,100 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "GPT-5.4 Mini"
     },
     {
+      "id": "gpt-5.5",
+      "name": "GPT-5.5"
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna"
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol"
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "name": "GPT-5.6 Terra"
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra"
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna"
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol"
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol"
+    },
+    {
+      "id": "claude-fable-5",
+      "name": "Claude Fable 5"
+    },
+    {
+      "id": "claude-fable-5.1",
+      "name": "Claude Fable 5.1"
+    },
+    {
       "id": "claude-haiku-4.5",
       "name": "Claude Haiku 4.5"
     },
     {
-      "id": "claude-opus-4.5",
-      "name": "Claude Opus 4.5"
+      "id": "claude-haiku-5.5",
+      "name": "Claude Haiku 5.5"
     },
     {
-      "id": "claude-sonnet-4.5",
-      "name": "Claude Sonnet 4.5"
+      "id": "claude-opus-4.8",
+      "name": "Claude Opus 4.8"
+    },
+    {
+      "id": "claude-opus-4.8-fast",
+      "name": "Claude Opus 4.8 (Fast)"
+    },
+    {
+      "id": "claude-opus-5",
+      "name": "Claude Opus 5"
+    },
+    {
+      "id": "claude-opus-5.5",
+      "name": "Claude Opus 5.5"
     },
     {
       "id": "claude-sonnet-4.6",
       "name": "Claude Sonnet 4.6"
     },
     {
-      "id": "claude-opus-4.6",
-      "name": "Claude Opus 4.6"
+      "id": "claude-sonnet-5",
+      "name": "Claude Sonnet 5"
     },
     {
-      "id": "claude-opus-4.7",
-      "name": "Claude Opus 4.7"
+      "id": "claude-sonnet-5.5",
+      "name": "Claude Sonnet 5.5"
     },
     {
-      "id": "gemini-2.5-pro",
-      "name": "Gemini 2.5 Pro"
+      "id": "gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash"
     },
     {
-      "id": "gemini-3-flash-preview",
-      "name": "Gemini 3 Flash"
+      "id": "gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash"
     },
     {
-      "id": "gemini-3.1-pro-preview",
-      "name": "Gemini 3.1 Pro"
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon"
     },
     {
-      "id": "grok-code-fast-1",
-      "name": "Grok Code Fast 1"
+      "id": "kimi-k3",
+      "name": "Kimi K3"
     },
     {
-      "id": "oswe-vscode-prime",
-      "name": "Raptor Mini"
-    },
-    {
-      "id": "goldeneye-free-auto",
-      "name": "GoldenEye"
+      "id": "mai-code-1.1-flash",
+      "name": "MAI-Code-1.1-Flash"
     },
     {
       "id": "text-embedding-3-small",
@@ -2352,8 +2441,8 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "embedding"
     },
     {
-      "id": "text-embedding-3-large",
-      "name": "Text Embedding 3 Large (GitHub)",
+      "id": "text-embedding-ada-002",
+      "name": "Text Embedding Ada 002 (GitHub)",
       "kind": "embedding"
     }
   ],
@@ -2506,6 +2595,22 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "grok-4.2",
       "name": "Grok 4.2 (4.20 Beta)"
+    },
+    {
+      "id": "grok-4.20",
+      "name": "Grok 4.20"
+    },
+    {
+      "id": "grok-4.20-beta",
+      "name": "Grok 4.20 Beta"
+    },
+    {
+      "id": "grok-image",
+      "name": "Grok Imagine Image"
+    },
+    {
+      "id": "grok-video",
+      "name": "Grok Imagine Video"
     }
   ],
   "groq": [
@@ -3429,6 +3534,50 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "kind": "image"
     }
   ],
+  "daoxe": [
+    { "id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6" },
+    { "id": "claude-opus-4-8", "name": "Claude Opus 4.8" },
+    { "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5" },
+    { "id": "gpt-5.5", "name": "GPT-5.5" },
+    { "id": "gpt-5.4", "name": "GPT-5.4" },
+    { "id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview" },
+    { "id": "grok-4.5", "name": "Grok 4.5" },
+    { "id": "grok-4.3", "name": "Grok 4.3" },
+    { "id": "kimi-k2.5", "name": "Kimi K2.5" }
+  ],
+  "dx": [
+    { "id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6" },
+    { "id": "claude-opus-4-8", "name": "Claude Opus 4.8" },
+    { "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5" },
+    { "id": "gpt-5.5", "name": "GPT-5.5" },
+    { "id": "gpt-5.4", "name": "GPT-5.4" },
+    { "id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview" },
+    { "id": "grok-4.5", "name": "Grok 4.5" },
+    { "id": "grok-4.3", "name": "Grok 4.3" },
+    { "id": "kimi-k2.5", "name": "Kimi K2.5" }
+  ],
+  "nan": [
+    { "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash" },
+    { "id": "mimo-v2.5", "name": "MiMo V2.5" },
+    { "id": "mimo-v2.6-flash", "name": "MiMo V2.6 Flash" },
+    { "id": "qwen3.8-flash", "name": "Qwen3.8 Flash" },
+    { "id": "qwen3.6", "name": "Qwen3.6" },
+    { "id": "glm5.3", "name": "GLM 5.3" },
+    { "id": "glm5.3-flash", "name": "GLM 5.3 Flash" },
+    { "id": "gemma4", "name": "Gemma 4" }
+  ],
+  "openadapter": [
+    { "id": "glm-4.7", "name": "GLM 4.7" },
+    { "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat" },
+    { "id": "qwen/qwen-2.5-72b-instruct", "name": "Qwen 2.5 72B Instruct" },
+    { "id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B Instruct" }
+  ],
+  "oad": [
+    { "id": "glm-4.7", "name": "GLM 4.7" },
+    { "id": "deepseek/deepseek-chat", "name": "DeepSeek Chat" },
+    { "id": "qwen/qwen-2.5-72b-instruct", "name": "Qwen 2.5 72B Instruct" },
+    { "id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B Instruct" }
+  ],
   "nebius": [
     {
       "id": "meta-llama/Llama-3.3-70B-Instruct",
@@ -3525,6 +3674,21 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "deepseek-v4.1-flash:cloud",
       "name": "DeepSeek V4.1 Flash (Cloud)"
+    },
+    {
+      "id": "clef",
+      "name": "Clef",
+      "kind": "systemone"
+    },
+    {
+      "id": "clef-flash",
+      "name": "Clef Flash",
+      "kind": "systemone"
+    },
+    {
+      "id": "clef:cloud",
+      "name": "Clef (Cloud)",
+      "kind": "systemone"
     }
   ],
   "openai": [
@@ -3783,6 +3947,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "name": "Kimi K3"
     },
     {
+      "id": "kimi-k3.1-pro",
+      "name": "Kimi K3.1 Pro"
+    },
+    {
       "id": "deepseek-v4-pro",
       "name": "DeepSeek V4 Pro"
     },
@@ -3909,6 +4077,26 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "muse-spark-1.3-contributor",
       "name": "Muse Spark 1.3 Contributor"
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5"
+    },
+    {
+      "id": "gemini-4-argon-contributor",
+      "name": "Gemini 4 Argon Contributor"
+    },
+    {
+      "id": "longcat-2.5-preview-free",
+      "name": "LongCat 2.5 Preview (Free)"
+    },
+    {
+      "id": "step-5-preview",
+      "name": "Step 5 Preview"
+    },
+    {
+      "id": "beam-free",
+      "name": "Beam (Free)"
     }
   ],
   "oc": [
@@ -4643,6 +4831,14 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "mmodel",
       "name": "MiniMax-M3"
     },
+    {
+      "id": "smodel",
+      "name": "Sonus"
+    },
+    {
+      "id": "cmodel",
+      "name": "Cantus"
+    },
   ],
   "qd": [
     {
@@ -4708,6 +4904,14 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "mmodel",
       "name": "MiniMax-M3"
+    },
+    {
+      "id": "smodel",
+      "name": "Sonus"
+    },
+    {
+      "id": "cmodel",
+      "name": "Cantus"
     }
   ],
   "recraft": [
@@ -4780,6 +4984,54 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
         "size"
       ],
       "kind": "image"
+    }
+  ],
+  "sensenova": [
+    {
+      "id": "sensenova-6.8-flash-lite",
+      "name": "SenseNova 6.8 Flash Lite"
+    },
+    {
+      "id": "sensenova-u1.5-lite",
+      "name": "SenseNova U1.5 Lite",
+      "kind": "image",
+      "params": [
+        "n",
+        "size",
+        "output_format",
+        "response_format",
+        "watermark",
+        "prompt_extend"
+      ]
+    },
+    {
+      "id": "sensenova-u1.5-fast",
+      "name": "SenseNova U1.5 Fast",
+      "kind": "image",
+      "params": [
+        "n",
+        "size",
+        "output_format",
+        "response_format",
+        "watermark",
+        "prompt_extend"
+      ]
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash"
+    },
+    {
+      "id": "deepseek-flash",
+      "name": "DeepSeek V4.1 Flash"
+    },
+    {
+      "id": "glm-5.2",
+      "name": "GLM-5.2"
+    },
+    {
+      "id": "kimi-k3",
+      "name": "Kimi K3"
     }
   ],
   "siliconflow": [
@@ -5026,6 +5278,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "vertex": [
+    {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon"
+    },
     {
       "id": "gemini-3.1-pro-preview",
       "name": "Gemini 3.1 Pro Preview"
@@ -5488,6 +5744,10 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   ],
   "xai": [
     {
+      "id": "grok-4.7",
+      "name": "Grok 4.7"
+    },
+    {
       "id": "grok-4.6",
       "name": "Grok 4.6"
     },
@@ -5703,6 +5963,24 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "zd": [],
+  "atmo": [
+    { "id": "cc/claude-sonnet-4-6", "name": "Claude Sonnet 4.6" },
+    { "id": "cc/claude-opus-4-7", "name": "Claude Opus 4.7" },
+    { "id": "cx/gpt-5.6-sol", "name": "GPT-5.6 Sol" },
+    { "id": "cb/gemini-3.1-pro", "name": "Gemini 3.1 Pro" },
+    { "id": "cbcn/glm-5.3", "name": "GLM 5.3" },
+    { "id": "ali/kimi-k2.7-code", "name": "Kimi K2.7 Code" },
+    { "id": "ali/qwen3.8-max", "name": "Qwen 3.8 Max" },
+    { "id": "ali/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash" }
+  ],
+  "rc": [
+    { "id": "deepseek-ai/DeepSeek-V4.1-Flash", "name": "DeepSeek V4.1 Flash" },
+    { "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017", "name": "DeepSeek V4.1 Flash 1017" },
+    { "id": "zai-org/GLM-5.3", "name": "GLM 5.3" },
+    { "id": "zai-org/GLM-5.3-Flash", "name": "GLM 5.3 Flash" },
+    { "id": "Qwen/Qwen3.8-Flash", "name": "Qwen3.8 Flash" },
+    { "id": "openai/gpt-oss-120b", "name": "gpt-oss 120B" }
+  ],
   "af": [
     {
       "id": "gpt-oss-120b",

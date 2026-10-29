@@ -170,11 +170,30 @@ docker run -d --name 9router-go --restart unless-stopped \
 ## 💡 Key Features
 
 - 🖥️ Native Svelte 5 dashboard: providers, OAuth, combos, proxy pools, API keys, usage, quota, settings, plans, per-entry sidebar visibility
+- 💱 Cost display in USD, IDR, EUR and ten more currencies — editable rate table, dual display, one-click refresh from a public provider
 - 🔌 OpenAI Chat, Claude Messages, Gemini, Ollama-compatible, Responses, embeddings, media, search, web tools
 - 🔁 Combos with fallback, round-robin, sticky routing, fusion, capability-aware reordering
 - 👥 Per-provider executors, OAuth refresh, reactive 401 retry
 - 📡 Live usage + console-log SSE streams, stall detection
 - 💾 SQLite WAL persistence, outbound proxy support, self-update, MITM commands, Docker, cross-compilation
+
+For sequential combo routing, set **Model response timeout** in seconds (decimals
+such as `5.3` are fine) in the combo's Edit dialog, or from the compact field on the
+combo card. Empty or `0` disables it. The timer covers each model
+candidate except the last, including connection selection and waiting for a
+usable response. If it expires before output is committed, the router cancels
+that candidate and tries the next. The last candidate keeps the gateway's
+normal deadline, so the setting never makes a combo fail sooner than it would
+without it (#744). An active stream is not cut off by this setting. For
+non-streaming requests, the timer covers the wait for the complete response.
+Fusion panel timing is separate. A model that times out is left out of that
+combo for a
+grace period (default 5 minutes, set per combo under the timeout in the Edit
+dialog; `0` re-includes it on the next request) and then rejoins the chain. If
+every model in the chain is inside its grace period, the full chain is used. The
+pause is held in memory and resets on restart. Stored as
+`firstTokenGraceMs` next to the timeout. The dashboard shows seconds; the setting is stored in
+milliseconds as `comboStrategies[comboName].firstTokenTimeoutMs`.
 
 ---
 
@@ -326,8 +345,55 @@ For Claude Messages clients: `ANTHROPIC_BASE_URL=http://localhost:20130/v1`.
 | `HTTP_PROXY` / `HTTPS_PROXY` | Go defaults | Upstream egress proxy |
 | `PPROF_ENABLED` | `false` | Expose `/debug/pprof/*` (keep off on untrusted networks) |
 | `TRUST_PROXY` / `TRUST_CLOUDFLARE` | unset | Trust forwarded client-IP headers |
+| `TRUSTED_PROXIES` | unset | CIDR list of the reverse proxies whose forwarded client-IP headers are trusted |
+| `GEMINI_WEB_ROTATION` | `on` | Renew the Gemini Web session cookie in the background (see below) |
+
+#### Gemini Web session renewal
+
+The `gemini-web` provider reaches `gemini.google.com` with a session cookie,
+and Google rotates the session's timestamp cookie (`__Secure-1PSIDTS`) every
+few minutes. The router renews it in the background, so a signed-in account
+keeps reaching the models it pays for instead of falling back to one model
+after a few minutes.
+
+**There are three ways to get a session, and the dashboard offers two of
+them as a button.**
+
+1. *A throwaway browser* — the safest. The button opens a browser with a
+   profile of its own, waits for the Google sign-in, reads the session out of
+   it, then closes the browser and deletes the profile. Nothing is left
+   running that could rotate the session, so the router's renewal is the
+   only one.
+2. *A browser that is already signed in* — the convenient one. The button
+   opens the browser's own cookie database, takes the key that seals it from
+   the platform's secret store (the login keyring on Linux, the Keychain on
+   macOS, the profile's "Local State" file on Windows), and unseals the
+   cookies. **A browser that is still open keeps rotating the same session**
+   and the router renews it from the other side, and the two cancel each
+   out — which signs the account out. Close the browser first, or use the
+   throwaway browser above. The dashboard says so when it finds a browser
+   that is running.
+3. *A cookie you paste* — the fallback. Copy the cookie header from an
+   Incognito window that you close right after, not from a normal tab, and
+   paste it into the connection form.
+
+Set `GEMINI_WEB_ROTATION=off` to run the router without renewing anything at
+all. That is the right choice when the credential belongs to a browser you
+want to keep using.
 
 `.env.example` documents the security-sensitive subset and OAuth overrides.
+
+A forwarded client-IP header is only read when the TCP peer is inside the
+trusted set — otherwise a client could rotate `X-Forwarded-For` and give every
+login attempt its own rate-limit bucket. `TRUST_PROXY=true` trusts loopback and
+the RFC1918/link-local ranges; `TRUSTED_PROXIES` takes a comma-separated list
+of CIDRs or single IPs and **replaces** those defaults, so set it when the
+proxy connects from an address outside them.
+
+Behind a proxy that is *not* in the trusted set, every request is bucketed by
+the proxy's own socket address, so all users of that proxy share one login
+bucket: five failed attempts lock them all out. `TRUSTED_PROXIES` is the knob
+that separates them again.
 
 ### API surface
 
