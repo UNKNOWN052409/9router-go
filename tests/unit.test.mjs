@@ -74,7 +74,7 @@ test("buildPrompt keeps conversation when tools table is huge", () => {
   assert.ok(out.includes("===AVAILABLE_TOOLS==="), "tool protocol must be present");
 });
 
-// ---- shim: parseToolCall ----
+// ---- shim: parseToolCall / parseToolCalls ----
 test("parseToolCall extracts a bare JSON tool call", () => {
   const c = shim.parseToolCall('{"tool_call":{"name":"get_weather","arguments":{"city":"Tokyo"}}}');
   assert.strictEqual(c.name, "get_weather");
@@ -86,6 +86,56 @@ test("parseToolCall extracts a fenced tool call with prose around it", () => {
 });
 test("parseToolCall returns null for plain text", () => {
   assert.strictEqual(shim.parseToolCall("Just a normal answer."), null);
+});
+test("parseToolCalls returns [] for plain text and non-tool JSON", () => {
+  assert.deepStrictEqual(shim.parseToolCalls("Just a normal answer."), []);
+  assert.deepStrictEqual(shim.parseToolCalls('{"result":{"answer":42}}'), []);
+});
+test("parseToolCalls extracts the multi-call tool_calls array", () => {
+  const calls = shim.parseToolCalls('{"tool_calls":[{"name":"read_file","arguments":{"path":"a.ts"}},{"name":"read_file","arguments":{"path":"b.ts"}}]}');
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(calls.map((c) => c.arguments.path), ["a.ts", "b.ts"]);
+});
+test("parseToolCalls extracts several sequential call objects wrapped in prose", () => {
+  const calls = shim.parseToolCalls('I will check both files. {"tool_call":{"name":"read_file","arguments":{"path":"a.ts"}}} and then {"tool_call":{"name":"read_file","arguments":{"path":"b.ts"}}} done.');
+  assert.strictEqual(calls.length, 2);
+});
+test("parseToolCalls survives braces inside JSON strings", () => {
+  const c = shim.parseToolCall('{"tool_call":{"name":"run_code","arguments":{"code":"const o = {a: 1}; print(o)"}}}');
+  assert.strictEqual(c.name, "run_code");
+  assert.strictEqual(c.arguments.code, "const o = {a: 1}; print(o)");
+});
+test("parseToolCalls accepts the wrapper-less {name, arguments} form", () => {
+  const c = shim.parseToolCall('{"name":"get_weather","arguments":{"city":"Pune"}}');
+  assert.strictEqual(c.name, "get_weather");
+});
+test("parseToolCalls repairs single-quoted JSON", () => {
+  const c = shim.parseToolCall("{'tool_call':{'name':'a','arguments':{'x':'y'}}}");
+  assert.strictEqual(c.name, "a");
+  assert.deepStrictEqual(c.arguments, { x: "y" });
+});
+test("parseToolCalls takes the OpenAI function-envelope entries of tool_calls", () => {
+  const calls = shim.parseToolCalls('{"tool_calls":[{"function":{"name":"a","arguments":"{\\"x\\":1}"}},{"function":{"name":"b","arguments":"{}"}}]}');
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(calls[0].arguments, { x: 1 });
+});
+
+// ---- shim: reasoning effort directive ----
+test("buildPrompt appends a high-effort directive", () => {
+  const out = shim.buildPrompt([{ role: "user", content: "q" }], [], null, false, [], "high");
+  assert.ok(out.includes("Reasoning effort: high"));
+});
+test("buildPrompt appends a low-effort directive", () => {
+  const out = shim.buildPrompt([{ role: "user", content: "q" }], [], null, false, [], "low");
+  assert.ok(out.includes("Reasoning effort: low"));
+});
+test("buildPrompt adds no directive for medium or unset effort", () => {
+  assert.ok(!shim.buildPrompt([{ role: "user", content: "q" }], [], null, false, [], "medium").includes("Reasoning effort"));
+  assert.ok(!shim.buildPrompt([{ role: "user", content: "q" }], [], null, false, [], undefined).includes("Reasoning effort"));
+});
+test("buildToolsProtocol advertises the multi-invocation form", () => {
+  const proto = shim.buildToolsProtocol([{ function: { name: "a", description: "x", parameters: {} } }], null);
+  assert.ok(proto.includes("tool_calls"));
 });
 
 // ---- worker: runDirFor / partialPathFor / selectArgv ----

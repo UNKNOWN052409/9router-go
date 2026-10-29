@@ -22,6 +22,18 @@ It does two things:
    `tools`/`tool_calls`, `response_format: json_object`, base64 image
    attachments) and translates to/from what the CLI can do.
 
+Tool calling and reasoning (fixed 2026-10-29): multiple tool calls in one
+reply are extracted into a proper OpenAI `tool_calls` array (parallel calls
+verified live: `get_weather{"city":"Tokyo"}` + `{"city":"Delhi"}` in one
+turn); the extractor survives fenced JSON, prose wrappers, braces inside
+strings, single quotes and the wrapper-less `{name, arguments}` shape, and
+runs only when the request actually carried tools. `reasoning_effort` (or
+`reasoning.effort`) is honored as a prompt directive (low/medium/high), the
+CLI's real token counts are returned in `usage` (`reasoning_tokens` in
+`completion_tokens_details` when reported), and visible reasoning parts are
+forwarded as `reasoning_content`. Streaming with tools buffers instead of
+streaming, so protocol JSON can no longer leak into content deltas.
+
 ```
 client (existing config, 127.0.0.1:20130)
    │  POST /v1/chat/completions   model: oc/<model>   ← same endpoint as before
@@ -47,9 +59,16 @@ Version `opencode-ai@1.18.35` was used for every test in this repo.
 
 ```cmd
 install.cmd     :: one-time: checks prerequisites, creates dirs, registers the hidden watchdog
-start.cmd       :: starts the shim + worker (hidden). No proxy setup, no manual config
+start.cmd       :: starts the shim + worker (hidden) and seeds the router's bare-name
+                   combos automatically (no-op when no 9router database exists)
 stop.cmd        :: stops them
 ```
+
+That is the whole setup: **clone → `install.cmd` → `start.cmd` → use it.** When a
+9router database is present, `start.cmd` also seeds the single-member combos
+that make bare model names (`glm-5.3-flash-free`, with or without a prefix,
+with or without the `-free` suffix) resolve to the reset lane — no provider
+pairs, no manual dashboard steps, nothing else to run afterwards.
 
 Then use it like any OpenAI API — **nothing else to configure**:
 
@@ -305,6 +324,7 @@ tests/unit.test.mjs        pure-function unit tests (CI-safe, no network)
 install/start/stop.cmd     Windows lifecycle (hidden windows)
 install/start/stop.sh      Linux/macOS lifecycle (Render, VPS — auto-installs opencode)
 scripts/patch-node9router-oc.js  wires the built-in oc/ lane to the shim (idempotent)
+scripts/seed-router-combos.js    seeds bare-name combos into the router sqlite (idempotent)
 .github/workflows/ci.yml   GitHub Actions: syntax checks + unit tests
 docs/ARCHITECTURE.md       component detail + data flow + safety model
 docs/OPERATIONS.md         run, restart, logs, troubleshooting

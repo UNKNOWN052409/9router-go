@@ -11,9 +11,10 @@ rem  Nothing else is required: point any OpenAI client at
 rem    http://127.0.0.1:20142/v1        (standalone mode)
 rem  and use model ids like glm-5.3-flash-free.
 rem
-rem  Optional: pass --with-router to also apply the node-9router
-rem  registry patch and start 9router-go if its start script exists
-rem  (only for users who route through 9router).
+rem  Optional: pass --with-router to also apply the node-9router registry
+rem  patch and start the gateway when its start script is known (set the
+rem  N9R_GATEWAY_START env var to that script's full path; N9R_HOME\rotation\
+rem  start-9router-go-rotation.cmd is tried as a fallback).
 rem ============================================================
 setlocal
 set "DIR=%~dp0scripts"
@@ -24,14 +25,20 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='no
 rem --- 2. worker (fresh-session runner; serve boots inside it) ---
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-worker' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\oc-cli-worker.js'; Write-Output 'worker started' } else { Write-Output 'worker already running' } }"
 
-rem --- 3. optional: 9router integration ---
+rem --- 3. router wiring (idempotent; skips when no 9router database exists) ---
+if exist "%DIR%\seed-router-combos.js" node "%DIR%\seed-router-combos.js"
+
+rem --- 4. optional: node-9router registry patch + gateway start ---
 if /i "%1"=="--with-router" (
     if exist "%DIR%\patch-node9router-oc.js" (
         node "%DIR%\patch-node9router-oc.js"
         echo [start] node-9router oc/ lane patched if needed.
     )
-    if exist "<9router-install>\rotation\start-9router-go-rotation.cmd" (
-        call "<9router-install>\rotation\start-9router-go-rotation.cmd"
+    if defined N9R_GATEWAY_START (
+        call "%N9R_GATEWAY_START%"
+        echo [start] gateway start script invoked.
+    ) else if defined N9R_HOME (
+        if exist "%N9R_HOME%\rotation\start-9router-go-rotation.cmd" call "%N9R_HOME%\rotation\start-9router-go-rotation.cmd"
     )
 )
 

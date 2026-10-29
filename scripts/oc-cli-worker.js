@@ -177,15 +177,25 @@ async function serveChat(prompt, model, files, onPartial) {
   const out = await resp.json().catch(() => null);
   if (!out || !Array.isArray(out.parts)) return null;
   let text = "";
+  let reasoning = "";
   for (const p of out.parts) {
     if (p && p.type === "text" && p.text) {
       text += p.text;
       if (onPartial) { try { onPartial(p.text); } catch (_) {} }
+    } else if (p && (p.type === "reasoning" || p.type === "reasoning_content") && p.text) {
+      // Some models emit visible reasoning parts; forwarded as reasoning_content.
+      reasoning += p.text;
     }
   }
   const blob = JSON.stringify(out);
   if (/FreeUsageLimit|429|Invalid API key|Unexpected server error/i.test(blob)) return null;
-  return { text, error: null };
+  // The serve response carries the session message info (with token counts)
+  // when the upstream reported them; forwarded for OpenAI usage mapping.
+  const tokens = out.info && out.info.tokens && typeof out.info.tokens === "object" ? out.info.tokens : null;
+  const result = { text, error: null };
+  if (tokens) result.tokens = tokens;
+  if (reasoning) result.reasoning = reasoning;
+  return result;
 }
 
 function runJob(prompt, model, files, onPartial) {
@@ -249,6 +259,8 @@ const args = selectArgv(model).concat(attachArgs);
     const child = spawn(OC_EXE, args, { cwd: runDir, windowsHide: true, env: env });
     let buf = "";
     let text = "";
+    let reasoning = "";
+    let tokens = null;
     let errOut = "";
     let errored = null;
     const timer = setTimeout(() => {
@@ -265,12 +277,22 @@ const args = selectArgv(model).concat(attachArgs);
         if (!line.startsWith("{")) continue;
         let ev;
         try { ev = JSON.parse(line); } catch (_) { continue; }
-        if (ev.type === "text" && ev.part && ev.part.text) {
-          text += ev.part.text;
-          if (onPartial) { try { onPartial(ev.part.text); } catch (_) {} }
+        const part = ev.part || {};
+        if (ev.type === "text" && part.text) {
+          text += part.text;
+          if (onPartial) { try { onPartial(part.text); } catch (_) {} }
+        }
+        else if ((part.type === "reasoning" || part.type === "reasoning_content") && part.text) {
+          // Visible reasoning parts some models emit; forwarded as reasoning_content.
+          reasoning += part.text;
+        }
+        else if (ev.type === "step_finish" && part.tokens && typeof part.tokens === "object") {
+          // step-finish carries the CLI's token accounting (input/output/
+          // reasoning) — forwarded for OpenAI usage mapping.
+          tokens = part.tokens;
         }
         else if (ev.type === "error") {
-          const msg = (ev.part && (ev.part.error || ev.part.message)) || ev.error || "unknown error";
+          const msg = (part && (part.error || part.message)) || ev.error || "unknown error";
           errored = typeof msg === "string" ? msg : JSON.stringify(msg);
         }
       }
@@ -285,7 +307,10 @@ const args = selectArgv(model).concat(attachArgs);
       clearTimeout(timer);
       if (errOut.trim()) log("stderr(code=" + code + "):", errOut.slice(0, 300).replace(/\n/g, " "));
       cleanupRunDir(runDir);
-      resolve({ text, error: errored });
+      const result = { text, error: errored };
+      if (tokens) result.tokens = tokens;
+      if (reasoning) result.reasoning = reasoning;
+      resolve(result);
     });
     try {
       child.stdin.write(String(prompt || "hello") + "\n");

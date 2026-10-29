@@ -21,6 +21,18 @@ else
   echo "[start] worker started (pid $!)"
 fi
 
+# Router wiring (idempotent; skips itself when no 9router database exists),
+# so bare model names resolve to the reset-shim lane without any manual step.
+if [ -f "$DIR/seed-router-combos.js" ]; then
+  node "$DIR/seed-router-combos.js" || echo "[start] WARN: combo seeding skipped"
+fi
+
+# Optional gateway start: point N9R_GATEWAY_START at the gateway's start script.
+if [ -n "$N9R_GATEWAY_START" ] && [ -f "$N9R_GATEWAY_START" ]; then
+  echo "[start] invoking gateway start script"
+  bash "$N9R_GATEWAY_START" || true
+fi
+
 sleep 3
 curl -s -m 5 http://127.0.0.1:20142/health || echo "[start] WARN: shim not responding yet (serve may still be booting)"
 echo ""

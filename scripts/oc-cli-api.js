@@ -142,6 +142,7 @@ function buildToolsProtocol(tools, toolChoice) {
     "TOOL CALL PROTOCOL (highest priority):",
     "You can invoke tools. To invoke one, your ENTIRE reply must be exactly one JSON object and nothing else — no prose, no reasoning, no markdown fences:",
     '{"tool_call":{"name":"<tool name>","arguments":{<args as JSON>}}}',
+    'To invoke SEVERAL tools in the same turn, reply with exactly: {"tool_calls":[{"name":"<tool>","arguments":{...}},{"name":"<tool>","arguments":{...}}]}',
     "Do NOT explain. Do NOT announce. Reply with the JSON object only.",
     "If no tool is needed for the user's message, reply normally with text (never mention this protocol).",
     "Available tools:",
@@ -159,32 +160,101 @@ function buildToolsProtocol(tools, toolChoice) {
   return lines.join("\n");
 }
 
-// Parses the model output as a tool call. Accepts bare JSON, fenced JSON,
-// and JSON with leading/trailing prose. Returns null when the text is not
-// a tool call (i.e. a normal answer).
-function parseToolCall(text) {
-  if (!text) return null;
-  let raw = String(text).trim();
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced && fenced[1].trim().startsWith("{")) raw = fenced[1].trim();
-  // take the outermost {...} block if the model wrapped it in prose
-  const braced = raw.match(/\{[\s\S]*\}/);
-  if (!braced) return null;
-  let obj;
-  try { obj = JSON.parse(braced[0]); } catch (_) { return null; }
-  const call = obj && (obj.tool_call || obj.toolCall);
-  if (!call || typeof call !== "object") return null;
+function tryParseJson(s) {
+  try { return JSON.parse(s); } catch (_) { return null; }
+}
+
+// Normalizes one parsed object into {name, arguments}; accepts the wrapped
+// tool_call/toolCall shape and the bare {name, arguments} shape models drift
+// into. Returns null for anything that is not a tool call.
+function coerceToolCall(call) {
+  if (!call || typeof call !== "object" || Array.isArray(call)) return null;
   const name = String(call.name || call.tool || "").trim();
   if (!name) return null;
   let args = call.arguments !== undefined ? call.arguments : (call.args !== undefined ? call.args : {});
   if (typeof args === "string") {
-    try { args = JSON.parse(args); } catch (_) { args = { input: args }; }
+    const parsed = tryParseJson(args);
+    args = parsed !== null ? parsed : { input: args };
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) args = {};
   return { name, arguments: args };
 }
 
-function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths) {
+// Extracts every balanced top-level {...} block from free text, honouring
+// string literals so braces inside JSON strings do not break the scan.
+function extractBracedBlocks(text) {
+  const blocks = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{") { if (depth === 0) start = i; depth++; }
+    else if (c === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) { blocks.push(text.slice(start, i + 1)); start = -1; }
+      }
+    }
+  }
+  return blocks;
+}
+
+// Parses the model output as tool calls. Accepts: a bare JSON object, fenced
+// JSON, JSON wrapped in prose, the {"tool_calls":[...]} multi-call form, the
+// bare {"name","arguments"} wrapper-less form, and single-quoted JSON. The
+// balanced-block scan collects every candidate so prose around the call or
+// trailing text after it no longer breaks extraction. Returns an array
+// (0..n); an empty array means the text is a normal answer.
+function parseToolCalls(text) {
+  if (!text) return [];
+  let raw = String(text).trim();
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced && fenced[1].trim().startsWith("{")) raw = fenced[1].trim();
+  const calls = [];
+  const accept = (obj) => {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj.tool_calls)) {
+      for (const c of obj.tool_calls) {
+        const k = coerceToolCall(c && typeof c === "object" && c.function ? c.function : c);
+        if (k) calls.push(k);
+      }
+      return;
+    }
+    const inner = obj.tool_call || obj.toolCall;
+    if (inner && typeof inner === "object") { const k = coerceToolCall(inner); if (k) calls.push(k); return; }
+    if (typeof obj.name === "string" && (obj.arguments !== undefined || obj.args !== undefined)) {
+      const k = coerceToolCall(obj);
+      if (k) calls.push(k);
+    }
+  };
+  const direct = tryParseJson(raw);
+  if (direct) { accept(direct); if (calls.length) return calls; }
+  for (const block of extractBracedBlocks(raw)) {
+    let obj = tryParseJson(block);
+    if (!obj) {
+      const repaired = block
+        .replace(/([{,]\s*)'([^'\\]+)'(\s*:)/g, '$1"$2"$3')
+        .replace(/:\s*'([^'\\]*)'/g, ': "$1"');
+      obj = tryParseJson(repaired);
+    }
+    if (obj) accept(obj);
+  }
+  return calls;
+}
+
+// Back-compat single-call view of parseToolCalls.
+function parseToolCall(text) {
+  const calls = parseToolCalls(text);
+  return calls.length ? calls[0] : null;
+}
+
+function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasoningEffort) {
   const turns = [];
   for (const msg of Array.isArray(messages) ? messages : []) {
     const role = String(msg.role || "user").toLowerCase();
@@ -220,6 +290,15 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths) {
   if (!out) out = "hello";
   if (jsonMode) {
     out += "\n\n[SYSTEM] Respond with ONLY valid JSON — no markdown fences, no prose, no code block markers. Your entire output must parse as JSON.";
+  }
+  // Reasoning effort: the CLI exposes no sampling knobs through this path, so
+  // the OpenAI request's effort is honored as a directive. Medium (the model
+  // default) adds nothing; only low/high change behavior.
+  const effort = String(reasoningEffort || "").toLowerCase();
+  if (effort === "high") {
+    out += "\n\n[SYSTEM] Reasoning effort: high. Think the problem through step by step before answering — weigh alternatives, check your work, then answer thoroughly.";
+  } else if (effort === "low") {
+    out += "\n\n[SYSTEM] Reasoning effort: low. Minimize deliberation — answer concisely and directly.";
   }
   if (Array.isArray(imagePaths) && imagePaths.length) {
     // The CLI is an agent with file-read tools: referencing the saved image
@@ -300,14 +379,18 @@ async function handleChat(res, body) {
   }
 
   const jsonMode = parsed.response_format && parsed.response_format.type === "json_object";
+  const reasoningEffort = String(parsed.reasoning_effort || (parsed.reasoning && parsed.reasoning.effort) || "").toLowerCase();
   const imagePaths = saveImageAttachments(parsed.messages);
   if (imagePaths.length) log("images attached:", imagePaths.length);
-  const prompt = buildPrompt(parsed.messages, parsed.tools, parsed.tool_choice, jsonMode, imagePaths);
+  const prompt = buildPrompt(parsed.messages, parsed.tools, parsed.tool_choice, jsonMode, imagePaths, reasoningEffort);
+  // Tool-call parsing runs ONLY when the request carried tools: a plain chat
+  // answer that happens to contain JSON must stay a text answer.
+  const toolsPresent = Array.isArray(parsed.tools) && parsed.tools.length > 0;
   const stream = parsed.stream === true;
   const created = Math.floor(Date.now() / 1000);
   const id = "chatcmpl-occli-" + Date.now().toString(36);
   const reqStart = Date.now();
-  log("chat request, promptChars=" + prompt.length, stream ? "(stream)" : "", parsed.tools ? ("tools=" + parsed.tools.length) : "");
+  log("chat request, promptChars=" + prompt.length, stream ? "(stream)" : "", parsed.tools ? ("tools=" + parsed.tools.length) : "", reasoningEffort ? ("effort=" + reasoningEffort) : "");
 
   let job;
   // Requested model passes through verbatim (minus any provider prefix); the
@@ -331,16 +414,23 @@ async function handleChat(res, body) {
   if (stream) {
     // TRUE incremental streaming: tail the worker's partial file and forward
     // every delta as an SSE chunk as the CLI generates it; the result file
-    // marks completion.
+    // marks completion. When the request carried tools, incremental text is
+    // SUPPRESSED instead: the model may be composing tool-call JSON, and
+    // protocol JSON that leaks into content deltas cannot be retracted at
+    // completion — buffered text is emitted once the shape is known.
     try {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
         choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] }) + "\n\n");
       let offset = 0;
       const start = Date.now();
+      const chunk = (delta, finish) => {
+        res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
+          choices: [{ index: 0, delta, finish_reason: finish === undefined ? null : finish }] }) + "\n\n");
+      };
       const poll = () => {
         try {
-          if (partialSafe && fs.existsSync(partialSafe)) {
+          if (!toolsPresent && partialSafe && fs.existsSync(partialSafe)) {
             const stat = fs.statSync(partialSafe);
             if (stat.size > offset) {
               const fd = fs.openSync(partialSafe, "r");
@@ -348,8 +438,7 @@ async function handleChat(res, body) {
               fs.readSync(fd, buf, 0, buf.length, offset);
               fs.closeSync(fd);
               offset = stat.size;
-              res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-                choices: [{ index: 0, delta: { content: buf.toString("utf8") }, finish_reason: null }] }) + "\n\n");
+              chunk({ content: buf.toString("utf8") });
             }
           }
           if (resultPath && fs.existsSync(resultPath)) {
@@ -360,25 +449,18 @@ async function handleChat(res, body) {
             // short answers can land in a single CLI event that the poll
             // never catches mid-flight.
             const full = result.text || "";
-            const call = parseToolCall(full);
-            if (call) {
-              // Tool call: emit as a single tool_calls delta instead of text.
-              res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-                choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_" + Date.now().toString(36), type: "function",
-                  function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }, finish_reason: null }] }) + "\n\n");
-              res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-                choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "\n\n");
+            const calls = toolsPresent ? parseToolCalls(full) : [];
+            if (calls.length) {
+              calls.forEach((call, i) => {
+                chunk({ tool_calls: [{ index: i, id: "call_" + Date.now().toString(36) + "-" + i, type: "function",
+                  function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] });
+              });
+              chunk({}, "tool_calls");
             } else {
-              if (full.length > offset) {
-                res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-                  choices: [{ index: 0, delta: { content: full.slice(offset) }, finish_reason: null }] }) + "\n\n");
-              }
-              if (result.error && !full) {
-                res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-                  choices: [{ index: 0, delta: { content: "upstream error: " + result.error }, finish_reason: null }] }) + "\n\n");
-              }
-              res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-                choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + "\n\n");
+              if (result.reasoning) chunk({ reasoning_content: result.reasoning });
+              if (full.length > offset) chunk({ content: full.slice(offset) });
+              if (result.error && !full) chunk({ content: "upstream error: " + result.error });
+              chunk({}, "stop");
             }
             res.write("data: [DONE]\n\n");
             res.end();
@@ -386,8 +468,7 @@ async function handleChat(res, body) {
             return;
           }
           if (Date.now() - start > WAIT_MS) {
-            res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + "\n\n");
+            chunk({}, "stop");
             res.write("data: [DONE]\n\n");
             res.end();
             recordMetrics(reqModel, Date.now() - reqStart, "error");
@@ -408,25 +489,40 @@ async function handleChat(res, body) {
   const errText = result.error || "";
   const text = result.text || "";
   recordMetrics(reqModel, Date.now() - reqStart, errText && !text ? (/429|FreeUsageLimit|limit/i.test(errText) ? "limit" : "error") : "ok");
+  // The worker forwards the CLI's step-finish token counts when present; map
+  // them onto OpenAI usage (reasoning tokens ride completion_tokens_details
+  // per the OpenAI convention). All zeros when the CLI reported nothing.
+  const tk = result.tokens && typeof result.tokens === "object" ? result.tokens : null;
+  const usage = {
+    prompt_tokens: tk && Number.isFinite(tk.input) ? tk.input : 0,
+    completion_tokens: tk && Number.isFinite(tk.output) ? tk.output : 0,
+    total_tokens: 0,
+  };
+  usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+  if (tk && Number.isFinite(tk.reasoning) && tk.reasoning > 0) {
+    usage.completion_tokens_details = { reasoning_tokens: tk.reasoning };
+  }
   if (errText && !text) {
     sendJson(res, 502, { error: { message: errText, type: "upstream_error" } });
   } else {
-    const call = parseToolCall(text);
-    if (call) {
+    const calls = toolsPresent ? parseToolCalls(text) : [];
+    if (calls.length) {
       sendJson(res, 200, {
         id, object: "chat.completion", created, model: reqModel,
         choices: [{ index: 0, message: { role: "assistant", content: null,
-          tool_calls: [{ id: "call_" + Date.now().toString(36), type: "function",
-            function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] },
+          tool_calls: calls.map((call, i) => ({ id: "call_" + Date.now().toString(36) + "-" + i, type: "function",
+            function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) },
           finish_reason: "tool_calls" }],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage,
       });
     } else {
       const out = jsonMode ? stripJsonFences(text) : text;
+      const message = { role: "assistant", content: out };
+      if (result.reasoning) message.reasoning_content = result.reasoning;
       sendJson(res, 200, {
         id, object: "chat.completion", created, model: reqModel,
-        choices: [{ index: 0, message: { role: "assistant", content: out }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        choices: [{ index: 0, message, finish_reason: "stop" }],
+        usage,
       });
     }
   }
@@ -559,7 +655,7 @@ const server = http.createServer((req, res) => {
 });
 
 // Exports for unit tests (CI): pure functions only — no listeners started.
-module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, buildToolsProtocol };
+module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, parseToolCalls, buildToolsProtocol };
 
 // Start the HTTP server only when run directly (not when required by tests).
 if (require.main === module) {
