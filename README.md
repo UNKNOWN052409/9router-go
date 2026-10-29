@@ -1,12 +1,16 @@
-# Nine Router Go Fork
+# 9router-go — OpenCode free-model reset shim
 
-[![CI](https://github.com/UNKNOWN052409/9router-go/actions/workflows/ci.yml/badge.svg)](https://github.com/UNKNOWN052409/9router-go/actions/workflows/ci.yml)
+This branch (`master`, same work as `reset-shim`) holds the **free-model
+reset shim**: an OpenAI-compatible HTTP API in front of the **opencode CLI**,
+giving any OpenAI-SDK client access to opencode's free-tier models
+(`glm-5.3-flash-free`, `deepseek-v4.1-flash-free`, `mimo-v2.6-flash-free`, …)
+with **fresh free-tier quota per request** — integrated into the existing
+9router-go / 9router setup, so no client needs a new URL or port.
 
-OpenAI-compatible HTTP API shim in front of the **opencode CLI**, giving any
-OpenAI-SDK client access to opencode's free-tier models (`glm-5.3-flash-free`,
-`deepseek-v4.1-flash-free`, `mimo-v2.6-flash-free`, …) with **fresh free-tier
-quota per request** — integrated into the existing 9router-go / 9router
-setup, so no client needs a new URL or port.
+> The repo's default branch (`main`) is the 9router-go **gateway source**
+> (Go). This shim is what its
+> [Free OpenCode models section](https://github.com/UNKNOWN052409/9router-go/tree/main#-free-opencode-models-through-this-gateway)
+> routes to.
 
 It does two things:
 
@@ -20,13 +24,13 @@ It does two things:
 
 ```
 client (existing config, 127.0.0.1:20130)
-   │  POST /v1/chat/completions   model: ocz2/<model>   ← same endpoint as before
+   │  POST /v1/chat/completions   model: oc/<model>   ← same endpoint as before
    ▼
 9router (20130)  ──►  oc-cli-api.js (shim, 127.0.0.1:20142, internal)
-   │  job file: D:\scratch\oc-cli-api\jobs\<id>.job
+   │  job file: <OC_DATA_DIR>\jobs\<id>.job
    ▼
 oc-cli-worker.js (file-queue runner: fresh dir + fresh session per job)
-   │  spawns opencode.exe run --format json --model <model> [--file <abs path>]
+   │  spawns opencode run --format json --model <model> [--file <abs path>]
    ▼
 opencode CLI  ──→  free-tier model (glm / deepseek / mimo …)
 ```
@@ -251,8 +255,8 @@ Verified against the live chain (shim + worker + CLI):
 | 6 | Practical agentic workflow (folder + 2 files + node script + execute it) — GLM direct CLI | ✅ created `report/summary.md` and `count.js` (`console.log(42)`), output verified `42` |
 | 7 | DeepSeek v4.1 vision + file creation in one run (direct CLI) | ✅ correct colour + file written |
 | 8 | Context preservation with IDE-sized payload (339 tools + 41-turn history) | ✅ model answered from conversation context (`NIMBUS-ROCKET`) — regression test added after a real IDE incident |
-| 9 | **Through 9router-go gateway (port 20130)**: 5 sequential `ocz2/glm-5.3-flash-free` requests | ✅ 5/5 OK (8–75 s each), fresh run dir per request, **zero limit errors** — the gateway's own `ocz/*` lane 429s (`FreeUsageLimitError`) because it reuses one session; `ocz2/*` via this shim resets per request |
-| 10 | Tool calling through the gateway (`ocz2/…`) | ✅ model answered with weather tool flow |
+| 9 | **Through 9router-go gateway (port 20130)**: 5 sequential `ocz2/glm-5.3-flash-free` requests (gateway test of 2026-10-27, on the interim `ocz2/*` wiring; the final wiring is `oc/<model>`) | ✅ 5/5 OK (8–75 s each), fresh run dir per request, **zero limit errors** — the gateway's own `ocz/*` lane 429s (`FreeUsageLimitError`) because it reuses one session; shim-routed requests reset per request |
+| 10 | Tool calling through the gateway (`ocz2/…` at test time) | ✅ model answered with weather tool flow |
 
 ### Known failures / limitations (not hidden)
 
@@ -277,8 +281,10 @@ Verified against the live chain (shim + worker + CLI):
   Keys like `<your-router-key>` (from the sqlite `apiKeys`
   table) work. Resolved 2026-10-27.
 - The gateway's own `ocz/*` free-model lane hits `429 FreeUsageLimitError`
-  by design of its single-session opencode-zen connection. Use the `ocz2/*`
-  prefix (routed through this shim) for per-request reset behaviour.
+  by design of its single-session opencode-zen connection. Use `oc/<model>`
+  (final wiring: the built-in no-auth `opencode` provider routed through this
+  shim) for per-request reset behaviour — the `ocz2/*` prefix was the
+  interim wiring and is retired.
 
 ## Layout
 
@@ -310,6 +316,8 @@ docs/OPERATIONS.md         run, restart, logs, troubleshooting
 
 ## Repository status
 
-Organised locally for GitHub; not pushed yet. Everything in `docs/` and the
-test table above reflects verified reality — items that did not pass are
-listed as failures in *What was tested*, not dropped.
+Pushed at <https://github.com/UNKNOWN052409/9router-go> (`master` and
+`reset-shim` carry this shim; the default branch `main` carries the gateway
+source). CI runs on every branch push. Everything in `docs/` and the test
+table above reflects verified reality — items that did not pass are listed as
+failures in *What was tested*, not dropped.
