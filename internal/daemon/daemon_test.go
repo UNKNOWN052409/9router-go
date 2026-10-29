@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -237,4 +239,49 @@ func deadPID(t *testing.T) int {
 	}
 	t.Skip("no unused PID found in the probe range")
 	return 0
+}
+
+// A port that answers with anything that is not a 9router-go /api/version
+// JSON must not count as busy: documented deployments share the port with a
+// coexisting service (a proxy on 127.0.0.1 while the gateway binds the
+// wildcard), and the wildcard bind decides whether we can serve.
+func TestPortBusyIgnoresForeignListeners(t *testing.T) {
+	// A non-gateway responder (HTML like a foreign dashboard, or a bare
+	// TCP echo) must read as not busy.
+	html := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<!doctype html><html><body>not us</body></html>"))
+	}))
+	defer html.Close()
+	if busy, who := portBusy(html.URL); busy {
+		t.Fatalf("HTML responder counted as busy: %q", who)
+	}
+
+	// A responder that serves the updater's /api/version JSON IS a
+	// 9router-go and must read as busy even without a pid-file claim.
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"currentVersion":"1.9.16"}`))
+	}))
+	defer gateway.Close()
+	busy, who := portBusy(gateway.URL)
+	if !busy {
+		t.Fatalf("gateway JSON responder not counted as busy")
+	}
+	if who != "started outside this binary" {
+		t.Fatalf("unexpected busy reason: %q", who)
+	}
+
+	// A listener that closes without answering HTTP (plain accept, no
+	// response) is not a gateway either.
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}))
+	defer closed.Close()
+	if busy, _ := portBusy(closed.URL); busy {
+		t.Fatalf("non-HTTP responder counted as busy")
+	}
 }

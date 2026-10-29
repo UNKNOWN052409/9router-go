@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -322,7 +323,45 @@ func portBusy(url string) (bool, string) {
 	if pid := RunningPID(); pid > 0 {
 		return true, fmt.Sprintf("pid %d owns it", pid)
 	}
-	return true, "started outside this binary"
+	// Something answers, but it made no pid-file claim, so it is not a daemon
+	// of this binary. Before refusing, ask whether the responder IS a
+	// 9router-go gateway (GET /api/version returns the updater JSON). A
+	// documented deployment shares the port with a coexisting service — a
+	// local proxy bound to 127.0.0.1 while this gateway binds the wildcard —
+	// and that proxy must not count as busy: the wildcard bind below decides
+	// whether we can actually serve. Only a real 9router-go on the port does.
+	if respondsAsGateway(host, port) {
+		return true, "started outside this binary"
+	}
+	return false, ""
+}
+
+// respondsAsGateway reports whether the current listener on host:port
+// identifies itself as a 9router-go gateway: GET /api/version must answer
+// with the updater's JSON (non-empty currentVersion). Any other responder —
+// a proxy, another app's HTML dashboard, a connection that closes without
+// HTTP — is not a 9router-go and therefore does not own the port.
+func respondsAsGateway(host, port string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://"+net.JoinHostPort(host, port)+"/api/version", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := (&http.Client{Timeout: 1500 * time.Millisecond}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		CurrentVersion string `json:"currentVersion"`
+	}
+	return json.Unmarshal(body, &probe) == nil && probe.CurrentVersion != ""
 }
 
 // splitHostPort pulls the dialable host and port out of a dashboard URL.
