@@ -8,7 +8,8 @@
 # /usr/local/bin, falls back to ~/.local/bin).
 set -euo pipefail
 
-REPO="${REPO:-luqman-v1/9router-go}"
+# Downloads from this fork's GitHub Releases (set REPO to override).
+REPO="${REPO:-UNKNOWN052409/9router-go}"
 VERSION="${VERSION:-latest}"
 BINDIR="${BINDIR:-/usr/local/bin}"
 

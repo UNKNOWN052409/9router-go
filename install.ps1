@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = 'luqman-v1/9router-go'
+$Repo = 'UNKNOWN052409/9router-go'
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = 'latest' }
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
   $InstallDir = Join-Path $env:LOCALAPPDATA '9router-go'
