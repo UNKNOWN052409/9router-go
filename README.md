@@ -152,18 +152,27 @@ container. Set `OC_DATA_DIR` to a persistent disk on hosting platforms so
 quota buckets and logs survive restarts.
 
 
-## Router integration (verified 2026-10-27/28)
+## Router integration (verified 2026-10-27/28, prefix-free names 2026-10-29)
 
 **Final form — the built-in `opencode` no-auth provider is wired to the reset
 shim on BOTH routers. No custom providers (`oc-fresh` removed), no model
-aliases, no extra prefixes: clients use `oc/<model>` (or `ocz2/<model>` on
-paths where that legacy wiring is still present) against their existing
-endpoint and key.**
+aliases, no extra provider/connection pairs: clients use `oc/<model>` against
+their existing endpoint and key — and since 2026-10-29 the prefix is OPTIONAL:
+bare model names (`glm-5.3-flash-free`, `glm-5.3-flash`, …) resolve through
+the same lane via single-member combos stored in the routers' shared sqlite
+(`combos` table: one combo per free model, bare and suffix-less variants,
+each pointing at its `oc/<model>` name; the legacy `glm` combo was repointed
+to `oc/glm-5.3-flash-free` from its old non-shim members). Verified 11/11
+battery across both entry points with bare / `oc/` / `opencode/` /
+suffix-less names — zero limit errors. Note: the node router reads combos
+from the shared sqlite, not from `db.json`; `modelAliases` bare-name entries
+are never applied (prefix routing wins), which is why combos are the
+mechanism.**
 
 | Path | Router | Free-model names | How |
 |---|---|---|---|
-| `127.0.0.1:20130` (user path) | ZCode tool-shim → **node 9router (20128)** | `oc/<model>` | compiled provider registry patched: `transport.baseUrl → http://127.0.0.1:20142` |
-| `[::1]:20130` / LAN:20130 | **9router-go** (Go gateway) | `oc/<model>` | `OPENCODE_FREE_BASEURL` env in the start script (custom build) |
+| `127.0.0.1:20130` (user path) | ZCode tool-shim → **node 9router (20128)** | `oc/<model>` or bare `<model>` | compiled provider registry patched: `transport.baseUrl → http://127.0.0.1:20142` + bare-name combos |
+| `[::1]:20130` / LAN:20130 | **9router-go** (Go gateway) | `oc/<model>` or bare `<model>` | `OPENCODE_FREE_BASEURL` env in the start script (custom build) + same shared combos |
 
 (The `oc/` request URL is built as `${baseUrl}/inference/v1/chat/completions`,
 which is exactly the shim's route. Patch script:
