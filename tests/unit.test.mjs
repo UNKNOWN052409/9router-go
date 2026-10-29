@@ -160,3 +160,33 @@ test("MODEL_RUN_ARGS keys are the six supported free models", () => {
 
 console.log("\nunit: " + (failed ? failed + " FAILED" : "all passed"));
 if (failed) process.exit(1);
+
+// ---- shim: normalizeModel (prefixes fully optional, case-insensitive) ----
+test("normalizeModel passes canonical names through", () => {
+  assert.strictEqual(shim.normalizeModel("glm-5.3-flash-free"), "glm-5.3-flash-free");
+  assert.strictEqual(shim.normalizeModel(""), "glm-5.3-flash-free");
+});
+test("normalizeModel strips known provider prefixes", () => {
+  assert.strictEqual(shim.normalizeModel("oc/glm-5.3-flash-free"), "glm-5.3-flash-free");
+  assert.strictEqual(shim.normalizeModel("opencode/deepseek-v4.1-flash-free"), "deepseek-v4.1-flash-free");
+  assert.strictEqual(shim.normalizeModel("ocz2/mimo-v2.6-flash-free"), "mimo-v2.6-flash-free");
+});
+test("normalizeModel resolves ANY prefix by its last segment", () => {
+  assert.strictEqual(shim.normalizeModel("9router/glm-5.3-flash-free"), "glm-5.3-flash-free");
+  assert.strictEqual(shim.normalizeModel("my-proxy/org/deepseek-v4.1-flash-free"), "deepseek-v4.1-flash-free");
+});
+test("normalizeModel is case-insensitive and returns the canonical name", () => {
+  assert.strictEqual(shim.normalizeModel("GLM-5.3-FLASH-FREE"), "glm-5.3-flash-free");
+  assert.strictEqual(shim.normalizeModel("OC/DeepSeek-V4.1-Flash-Free"), "deepseek-v4.1-flash-free");
+});
+test("normalizeModel leaves unknown names verbatim for the worker gate", () => {
+  assert.strictEqual(shim.normalizeModel("gpt-42"), "gpt-42");
+});
+
+// ---- worker: selectArgv resolves prefixed names by last segment ----
+test("selectArgv resolves any-prefixed model names via the last segment", () => {
+  const prefixed = worker.selectArgv("9router/glm-5.3-flash-free");
+  assert.ok(prefixed.includes("opencode/glm-5.3-flash-free"));
+  const multi = worker.selectArgv("my-proxy/org/deepseek-v4.1-flash-free");
+  assert.ok(multi.includes("opencode/deepseek-v4.1-flash-free"));
+});

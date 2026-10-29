@@ -73,18 +73,19 @@ const DEFAULT_MODEL_ARGS = MODEL_RUN_ARGS["mimo-v2.6-flash-free"];
 const ATTACH_SRC_DIR = path.resolve("D:\\scratch\\oc-cli-api\\attachments");
 const ATTACH_EXTS = ["png", "jpg", "gif", "webp"];
 
-// Picks the spawn argv base from literal tables only. The requested model
-// is matched against these literals — user input never builds the command
-// line. Attachment --file args are appended in runJob after staging.
+// Picks the spawn argv base from literal tables only. The requested model is
+// matched against these literals — user input never builds the command line.
+// A model name carrying any provider prefix (9router/x, my-proxy/org/x, …)
+// resolves by its last path segment; unknown names fall back to the default
+// model's argv (documented behaviour). Attachment --file args are appended in
+// runJob after staging.
 function selectArgv(model) {
-  let base;
-  if (model === "glm-5.3-flash-free") base = MODEL_RUN_ARGS["glm-5.3-flash-free"];
-  else if (model === "deepseek-v4-flash-free") base = MODEL_RUN_ARGS["deepseek-v4-flash-free"];
-  else if (model === "deepseek-v4.1-flash-free") base = MODEL_RUN_ARGS["deepseek-v4.1-flash-free"];
-  else if (model === "muse-spark-1.3-contributor-free") base = MODEL_RUN_ARGS["muse-spark-1.3-contributor-free"];
-  else if (model === "jev-1.13-free") base = MODEL_RUN_ARGS["jev-1.13-free"];
-  else base = DEFAULT_MODEL_ARGS;
-  return base;
+  let base = Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model) ? MODEL_RUN_ARGS[model] : null;
+  if (!base && typeof model === "string" && model.includes("/")) {
+    const last = model.slice(model.lastIndexOf("/") + 1);
+    if (Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, last)) base = MODEL_RUN_ARGS[last];
+  }
+  return base || DEFAULT_MODEL_ARGS;
 }
 
 // The run directories stay config-free (an opencode.json in the cwd made
@@ -129,6 +130,12 @@ function runDirFor(name) {
 // ---------------------------------------------------------------------------
 const OC_SERVE_PORT = 20193;
 const OC_SERVE = "http://127.0.0.1:" + OC_SERVE_PORT;
+// Serve calls must time out: a wedged upstream otherwise hangs the job until
+// the shim's 180s wait gives up, and the wedged serve process then poisons
+// every later request — the "first token after 3 minutes" symptom. On a
+// timeout the serve is killed and rebooted, and the job falls back to the
+// spawn path (which has its own timeout and retry handling).
+const SERVE_TIMEOUT_MS = 120000;
 let serveProc = null;
 let serveBooting = null;
 
@@ -141,11 +148,19 @@ function serveUp() {
     serveProc.on("exit", () => { serveProc = null; serveBooting = null; resolve(false); });
     let tries = 0;
     const ping = setInterval(() => {
-      fetch(OC_SERVE + "/doc").then((r) => { if (r.ok) { clearInterval(ping); resolve(true); } }).catch(() => {});
+      fetch(OC_SERVE + "/doc", { signal: AbortSignal.timeout(5000) }).then((r) => { if (r.ok) { clearInterval(ping); resolve(true); } }).catch(() => {});
       if (++tries > 40) { clearInterval(ping); serveBooting = null; resolve(false); }
     }, 250);
   });
   return serveBooting;
+}
+
+// Kills a suspected-wedged serve so the next serveUp boots a fresh process.
+function restartServe(reason) {
+  log("serve restart:", reason);
+  if (serveProc) { try { serveProc.kill(); } catch (_) {} }
+  serveProc = null;
+  serveBooting = null;
 }
 
 function serveModelId(model) {
@@ -155,7 +170,11 @@ function serveModelId(model) {
 async function serveChat(prompt, model, files, onPartial) {
   const ok = await serveUp();
   if (!ok) return null; // fall back to spawn
-  const session = await fetch(OC_SERVE + "/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) }).then((r) => r.ok ? r.json() : null).catch(() => null);
+  const signal = AbortSignal.timeout(SERVE_TIMEOUT_MS);
+  let session;
+  try {
+    session = await fetch(OC_SERVE + "/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}), signal }).then((r) => r.ok ? r.json() : null).catch(() => null);
+  } catch (_) { restartServe("session create timeout"); return null; }
   if (!session || !session.id) return null;
   const parts = [{ type: "text", text: String(prompt || "hello") }];
   // Stage attachments exactly like the spawn path and reference them as file
@@ -171,10 +190,19 @@ async function serveChat(prompt, model, files, onPartial) {
       break;
     }
   }
-  const resp = await fetch(OC_SERVE + "/session/" + session.id + "/message", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: serveModelId(model), parts }) }).catch(() => null);
-  if (!resp || !resp.ok) return null;
-  const out = await resp.json().catch(() => null);
+  let out;
+  try {
+    const resp = await fetch(OC_SERVE + "/session/" + session.id + "/message", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: serveModelId(model), parts }), signal }).catch(() => null);
+    if (!resp || !resp.ok) return null;
+    out = await resp.json().catch(() => null);
+  } catch (_) {
+    // The abort fired mid-generation: the serve may still be fine (upstream
+    // slowness), but a hung fetch is indistinguishable from a wedged serve,
+    // so reboot it and let the spawn path serve this job.
+    restartServe("message timeout");
+    return null;
+  }
   if (!out || !Array.isArray(out.parts)) return null;
   let text = "";
   let reasoning = "";
@@ -343,10 +371,15 @@ function handleJobFile(file) {
   // the shim can forward real-time SSE chunks to its client.
   const partialPath = partialPathFor(base);
   // Model is whitelist-gated: only names with a literal argv entry run as
-  // themselves; anything else falls back to the default model's argv.
-  const model = typeof job.model === "string" && Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, job.model)
-    ? job.model
-    : "mimo-v2.6-flash-free";
+  // themselves; a name carrying any provider prefix resolves by its last
+  // path segment first; anything else falls back to the default model's
+  // argv (documented behaviour).
+  let model = typeof job.model === "string" ? job.model : "";
+  if (!Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model) && model.includes("/")) {
+    const last = model.slice(model.lastIndexOf("/") + 1);
+    if (Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, last)) model = last;
+  }
+  if (!Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model)) model = "mimo-v2.6-flash-free";
   log(base, "running, promptChars=" + String(job.prompt || "").length, "model=" + model);
 
   // Rotating-exit reality: a fresh ProxyRise IP can land on an edge that

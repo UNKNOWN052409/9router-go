@@ -31,6 +31,40 @@ const DATA_ROOT = path.resolve(
 const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
 const MODEL_ID = "glm-5.3-flash-free";
+// Known free-model names — the whitelist used by model normalization below
+// and advertised by GET /v1/models.
+const MODELS = [
+  "glm-5.3-flash-free",
+  "mimo-v2.6-flash-free",
+  "deepseek-v4-flash-free",
+  "deepseek-v4.1-flash-free",
+  "muse-spark-1.3-contributor-free",
+  "jev-1.13-free",
+];
+const KNOWN_MODELS = new Set(MODELS);
+
+// Resolves a client-supplied model name to the model that should run: exact
+// known name wins (case-insensitive, canonical form returned), then a known
+// provider prefix is stripped, then the last path segment after ANY prefix is
+// tried (9router/x, my-proxy/org/x, …). Unknown names pass through verbatim
+// for the worker whitelist to judge.
+function normalizeModel(raw) {
+  let m = String(raw || "").trim();
+  if (!m) return MODEL_ID;
+  const canonical = (s) => {
+    for (const k of MODELS) if (k.toLowerCase() === s.toLowerCase()) return k;
+    return null;
+  };
+  const hit = canonical(m);
+  if (hit) return hit;
+  m = m.replace(/^(opencode|oc|ocz2|ocz)\/+/i, "").trim();
+  const hit2 = canonical(m);
+  if (hit2) return hit2;
+  const last = m.slice(m.lastIndexOf("/") + 1).trim();
+  const hit3 = canonical(last);
+  if (hit3) return hit3;
+  return m;
+}
 const WAIT_MS = 180000;
 const POLL_MS = 500;
 const MAX_PROMPT_CHARS = 600000;
@@ -393,10 +427,12 @@ async function handleChat(res, body) {
   log("chat request, promptChars=" + prompt.length, stream ? "(stream)" : "", parsed.tools ? ("tools=" + parsed.tools.length) : "", reasoningEffort ? ("effort=" + reasoningEffort) : "");
 
   let job;
-  // Requested model passes through verbatim (minus any provider prefix); the
-  // worker whitelist-gates it against its literal argv table. No silent
-  // model switching for known free models — glm asks run glm.
-  const reqModel = String(parsed.model || "").replace(/^(opencode|oc|ocz)\//i, "").trim() || MODEL_ID;
+  // Prefixes are fully optional and ANY prefix is accepted: the model runs by
+  // its name, never by how it was addressed. Resolution order: exact known
+  // name → known prefix stripped → last path segment after ANY prefix
+  // (9router/x, my-proxy/org/x, …) → verbatim (the worker whitelist then
+  // decides; unknown names fall back to the default model, documented).
+  const reqModel = normalizeModel(parsed.model);
   try { job = submitJob(prompt, reqModel, imagePaths.length); } catch (e) {
     return sendJson(res, 500, { error: { message: "job submit failed: " + String(e) } });
   }
@@ -589,14 +625,6 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && /^\/v1\/models$/.test(req.url || "")) {
     // Advertise every model the worker's literal argv table supports — the
     // 9router-go gateway probes this list and exposes each as ocz2/<id>.
-    const MODELS = [
-      "glm-5.3-flash-free",
-      "mimo-v2.6-flash-free",
-      "deepseek-v4-flash-free",
-      "deepseek-v4.1-flash-free",
-      "muse-spark-1.3-contributor-free",
-      "jev-1.13-free",
-    ];
     return sendJson(res, 200, {
       object: "list",
       data: MODELS.map((m) => ({ id: m, object: "model", owned_by: "opencode-free" })),
@@ -655,7 +683,7 @@ const server = http.createServer((req, res) => {
 });
 
 // Exports for unit tests (CI): pure functions only — no listeners started.
-module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, parseToolCalls, buildToolsProtocol };
+module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, parseToolCalls, buildToolsProtocol, normalizeModel, MODELS };
 
 // Start the HTTP server only when run directly (not when required by tests).
 if (require.main === module) {
