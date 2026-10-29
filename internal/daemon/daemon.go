@@ -337,10 +337,10 @@ func portBusy(url string) (bool, string) {
 }
 
 // respondsAsGateway reports whether the current listener on host:port
-// identifies itself as a 9router-go gateway: GET /api/version must answer
-// with the updater's JSON (non-empty currentVersion). Any other responder —
-// a proxy, another app's HTML dashboard, a connection that closes without
-// HTTP — is not a 9router-go and therefore does not own the port.
+// identifies itself as THIS Go gateway: GET /api/version must answer with the
+// Go updater's JSON, whose goVersion field only this binary fills (the Node
+// 9router's /api/version — reachable through port-sharing proxies — returns
+// its own shape without goVersion, and must not count as busy).
 func respondsAsGateway(host, port string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
@@ -360,8 +360,9 @@ func respondsAsGateway(host, port string) bool {
 	}
 	var probe struct {
 		CurrentVersion string `json:"currentVersion"`
+		GoVersion      string `json:"goVersion"`
 	}
-	return json.Unmarshal(body, &probe) == nil && probe.CurrentVersion != ""
+	return json.Unmarshal(body, &probe) == nil && probe.CurrentVersion != "" && probe.GoVersion != ""
 }
 
 // splitHostPort pulls the dialable host and port out of a dashboard URL.

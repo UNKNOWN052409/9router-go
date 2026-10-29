@@ -261,7 +261,7 @@ func TestPortBusyIgnoresForeignListeners(t *testing.T) {
 	// 9router-go and must read as busy even without a pid-file claim.
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"currentVersion":"1.9.16"}`))
+		_, _ = w.Write([]byte(`{"currentVersion":"1.9.16","goVersion":"go1.27.3"}`))
 	}))
 	defer gateway.Close()
 	busy, who := portBusy(gateway.URL)
@@ -270,6 +270,19 @@ func TestPortBusyIgnoresForeignListeners(t *testing.T) {
 	}
 	if who != "started outside this binary" {
 		t.Fatalf("unexpected busy reason: %q", who)
+	}
+
+	// A listener that closes without answering HTTP (plain accept, no
+	// response) is not a gateway either.
+	// The Node 9router's /api/version (reachable through a port-sharing
+	// proxy) lacks goVersion — it must not count as this gateway either.
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"currentVersion":"0.5.104","latestVersion":"0.5.112","hasUpdate":true}`))
+	}))
+	defer node.Close()
+	if busy, _ := portBusy(node.URL); busy {
+		t.Fatalf("node-router version JSON counted as busy")
 	}
 
 	// A listener that closes without answering HTTP (plain accept, no
