@@ -297,6 +297,10 @@ jobs:
     needs: channel
     runs-on: ubuntu-latest
     environment: prod
+    # Forks (and any setup without Docker Hub credentials) skip this job
+    # instead of going red — the binaries job above publishes the release
+    # either way, and the installer/updater only consume GitHub Releases.
+    if: vars.DOCKERHUB_USERNAME != ''
     steps:
       - uses: actions/checkout@v4
 
