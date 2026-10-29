@@ -2,16 +2,15 @@
 
 # 9router-go — FREE AI Router & Token Saver (Single Binary)
 
+**Fork of [luqman-v1/9router-go](https://github.com/luqman-v1/9router-go) (which ports [9Router](https://github.com/decolua/9router) to Go), plus a built-in lane for OpenCode's free-tier models with per-request quota reset — see [Free OpenCode models through this gateway](#-free-opencode-models-through-this-gateway).**
+
 **Never stop coding. Save 20-40% tokens with RTK + auto-fallback to FREE & cheap AI models.**
 
 **Connect Claude Code, Cursor, Antigravity, Codex, Gemini, OpenCode, Cline, OpenClaw... to 40+ AI providers & 100+ models — no Node.js needed at runtime.**
 
-[![CI](https://github.com/luqman-v1/9router-go/actions/workflows/ci.yml/badge.svg)](https://github.com/luqman-v1/9router-go/actions/workflows/ci.yml)
-[![Release](https://github.com/luqman-v1/9router-go/actions/workflows/release.yml/badge.svg)](https://github.com/luqman-v1/9router-go/actions/workflows/release.yml)
-[![GitHub release](https://img.shields.io/github/v/release/luqman-v1/9router-go)](https://github.com/luqman-v1/9router-go/releases/latest)
-[![License](https://img.shields.io/github/license/luqman-v1/9router-go)](https://github.com/luqman-v1/9router-go/blob/main/LICENSE)
-[![GitHub All Releases](https://img.shields.io/github/downloads/luqman-v1/9router-go/total.svg)](https://github.com/luqman-v1/9router-go/releases)
-[![Telegram](https://img.shields.io/badge/Telegram-Join%20Group-26A5E1?logo=telegram&logoColor=white)](https://luqman-v1.github.io/9router-go/tg)
+[![CI](https://github.com/UNKNOWN052409/9router-go/actions/workflows/ci.yml/badge.svg)](https://github.com/UNKNOWN052409/9router-go/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/UNKNOWN052409/9router-go)](https://github.com/UNKNOWN052409/9router-go/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/UNKNOWN052409/9router-go?style=social)](https://github.com/UNKNOWN052409/9router-go/stargazers)
 
 [🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [⚙️ Setup](#-setup-guide) • [🔄 Share DB with 9Router](#-sharing-a-database-with-9router) • [🌐 Upstream](https://github.com/decolua/9router)
 
@@ -79,12 +78,12 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/UNKNOWN052409/9router-go/main/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell — installer writes to %LOCALAPPDATA% + user PATH, no admin needed)
-irm https://raw.githubusercontent.com/luqman-v1/9router-go/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/UNKNOWN052409/9router-go/main/install.ps1 | iex
 ```
 
 🎉 Then start it (defaults: port `20130`, data `~/.9router` — no flags needed):
@@ -135,7 +134,7 @@ reads that user's data dir rather than `SYSTEM`'s. Force a backend with
 
 **2. Connect a FREE provider (no signup needed):**
 
-Dashboard → Providers → Connect **Kiro AI** (~50 credits/month free) or **OpenCode Free** (no auth) → Done!
+Dashboard → Providers → Connect **Kiro AI** (~50 credits/month free) or **OpenCode Free** (no auth; see [Free OpenCode models](#-free-opencode-models-through-this-gateway) — start the shim first so it runs limit-free) → Done!
 
 **3. Use in your CLI tool:**
 
@@ -151,19 +150,14 @@ Claude Code / Codex / OpenClaw / Cursor / Cline Settings:
 **Alternatives:**
 
 ```bash
-# Docker — no build needed
-docker run -d --name 9router-go --restart unless-stopped \
-  -p 20130:20130 -v "$HOME/.9router:/data" \
-  -e PORT=20130 -e DATA_DIR=/data \
-  -e INITIAL_PASSWORD=your-secure-password \
-  luqmenul/9router-go:latest
-
-# Manual download — pick your file, no command line guesswork:
-# Windows → .exe | Mac M1+ → darwin-arm64 | Mac Intel → darwin-amd64
-# Linux VPS → linux-amd64 | Raspberry Pi → linux-arm64
+# Build from source (this fork publishes no Docker image / release binaries yet)
+git clone https://github.com/UNKNOWN052409/9router-go.git
+cd 9router-go
+make web-build && make build
+./9router-go
 ```
 
-📦 [All release binaries](https://github.com/luqman-v1/9router-go/releases/latest) • 🔨 [Build from source](#-setup-guide)
+**That's it!** Start coding with FREE AI models.
 
 ---
 
@@ -194,6 +188,39 @@ every model in the chain is inside its grace period, the full chain is used. The
 pause is held in memory and resets on restart. Stored as
 `firstTokenGraceMs` next to the timeout. The dashboard shows seconds; the setting is stored in
 milliseconds as `comboStrategies[comboName].firstTokenTimeoutMs`.
+
+---
+
+## 🔓 Free OpenCode models through this gateway
+
+What this fork adds on top of upstream: the built-in `opencode` no-auth
+provider's free models (`glm-5.3-flash-free`, `deepseek-v4.1-flash-free`,
+`mimo-v2.6-flash-free`, …) keep working **without usage limits** — every
+request is served by a fresh, anonymous opencode CLI session, which lands in a
+fresh quota bucket.
+
+- **Client side, nothing changes**: same endpoint, same gateway API key, model
+  names `oc/<model>` — the lane is wired into the `opencode` provider's
+  transport at startup when the shim is running.
+- **How it works**: the gateway routes `oc/*` to a small local shim
+  (OpenAI-compatible HTTP front-end + job worker) that spawns the real
+  opencode CLI in a brand-new working directory and session per request. The
+  free tier meters usage per project directory + CLI session, so a fresh
+  session = fresh quota. No IP change, no account, no key — the free tier
+  works anonymously, but **only** from the real CLI (synthesized HTTP clients
+  are fingerprint-gated into a permanent 429 bucket — verified by direct
+  probes; the gateway's own CLI-free transport answers `429
+  FreeUsageLimitError` upstream today).
+- **Setup**: start the shim (`install.cmd|sh`, then `start.cmd|sh` — one
+  command; auto-installs the opencode CLI if missing), then start the gateway
+  as usual. The full design, verified test table (5/5 zero-429 batteries, tool
+  calling, vision, SSE, IDE-sized context), known failures and honest
+  limitations are documented on the
+  [`master` branch README](https://github.com/UNKNOWN052409/9router-go/tree/master#readme)
+  (`reset-shim` branch is the same work).
+- **Status**: verified live 2026-10-27/28 against opencode-ai 1.18.35. Daily
+  upstream refill (UTC midnight) still applies per bucket; the reset removes
+  the per-session cap, not the daily one.
 
 ---
 
@@ -248,34 +275,16 @@ Full schema, operator contract, and multi-process limits: [`DATABASE.md`](DATABA
 
 ## ⚙️ Setup Guide
 
-### Release binary
-
-Download from [GitHub Releases](https://github.com/luqman-v1/9router-go/releases/latest), verify against `SHA256SUMS.txt`.
-
-### 🧪 Experimental builds
-
-Unreleased work also ships as **experimental** builds. They are published
-separately and are never offered to a normal install:
-
-- GitHub Releases marks them **Pre-release**, so `releases/latest` — the URL
-  `9router-go update` falls back to — keeps pointing at the stable version.
-- Docker Hub tags them `exp` (`luqmenul/9router-go:exp`), never `latest`.
-
-```bash
-docker pull luqmenul/9router-go:exp
-```
-
-Opt in only if you want to help shake out bugs. `9router-go update` will not
-install one over a stable release — grab the asset for your platform from the
-[pre-releases page](https://github.com/luqman-v1/9router-go/releases) and
-replace the running binary with it.
-
 ### Build from source
+
+This fork currently publishes **no release binaries or Docker images** — install
+scripts (`install.sh` / `install.ps1`) are kept for when releases are added, and
+build from source is the supported path:
 
 Prerequisites: Go 1.27 and Bun 1.x (dashboard is embedded into the binary, so build web first):
 
 ```bash
-git clone https://github.com/luqman-v1/9router-go.git
+git clone https://github.com/UNKNOWN052409/9router-go.git
 cd 9router-go
 make web-build   # bun install --frozen-lockfile && bun run build
 make build       # embeds VERSION into the Go binary
@@ -452,7 +461,8 @@ PRs follow the checks CI runs: `go vet ./...`, `go test -count=1 ./...`, `make t
 ## Credits
 
 - [9Router](https://github.com/decolua/9router) — original Next.js gateway & dashboard this Go port preserves compatibility with
+- [luqman-v1/9router-go](https://github.com/luqman-v1/9router-go) — the Go port this fork is based on
 
 ## 📄 License
 
-MIT License — lihat [`LICENSE`](https://github.com/luqman-v1/9router-go/blob/main/LICENSE).
+MIT License — lihat [`LICENSE`](https://github.com/UNKNOWN052409/9router-go/blob/main/LICENSE).

@@ -723,12 +723,11 @@ func ForwardZed(w http.ResponseWriter, req *Request) error {
 		}
 	}
 
-	var bodyCloser = resp.Body
-	defer func() {
-		if bodyCloser != nil {
-			_ = bodyCloser.Close()
-		}
-	}()
+	// The body is closed directly, not through a swappable closer: the
+	// JSON/JSONL branch below replaces the stream body with a NopCloser over
+	// an in-memory buffer, and a closer that follows that swap would close
+	// the buffer while the real response body stayed open.
+	defer func() { _ = resp.Body.Close() }()
 	forwardUpstreamResponseHeaders(w, resp.Header)
 
 	if req.IsStream {
@@ -744,7 +743,7 @@ func ForwardZed(w http.ResponseWriter, req *Request) error {
 			streamBody = io.NopCloser(bytes.NewReader(data))
 		}
 		stall := proxy.NewStallReaderWithContext(req.Ctx, streamBody, 0, "zed")
-		bodyCloser = stall
+		defer func() { _ = stall.Close() }()
 		return zedPipeStream(w, req, wire, stall)
 	}
 
