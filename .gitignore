@@ -5,3 +5,4 @@ logs/
 .env.*
 !.env.example
 .work/
+web/dist/
