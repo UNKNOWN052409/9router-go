@@ -66,7 +66,7 @@ function normalizeModel(raw) {
   return m;
 }
 const WAIT_MS = 180000;
-const POLL_MS = 500;
+const POLL_MS = 150;
 const MAX_PROMPT_CHARS = 600000;
 
 const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
@@ -362,6 +362,8 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
 
 let counter = 0;
 
+const WORKER_RUN_URL = "http://127.0.0.1:20194/run";
+
 function submitJob(prompt, model, attachCount) {
   counter = (counter + 1) % 100000;
   const id = "r" + Date.now().toString(36) + "-" + counter;
@@ -370,7 +372,16 @@ function submitJob(prompt, model, attachCount) {
   let n = Math.floor(Number(attachCount));
   if (!Number.isFinite(n) || n < 0) n = 0;
   if (n > 4) n = 4;
-  fs.writeFileSync(jobPath, JSON.stringify({ id, prompt, model: String(model || ""), attach: n }));
+  const payload = JSON.stringify({ id, prompt, model: String(model || ""), attach: n });
+  fs.writeFileSync(jobPath, payload);
+  // DIRECT path: hand the job to the worker the same millisecond instead of
+  // waiting for the queue sweep. Fire-and-forget — the file stays on disk,
+  // so a failed POST simply means the sweep picks it up (fallback, not a
+  // second run: the worker unlinks whichever copy it sees first).
+  const req = http.request(WORKER_RUN_URL, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(payload) }, timeout: 1500 }, (res) => { res.resume(); });
+  req.on("error", () => {});
+  req.on("timeout", () => req.destroy());
+  req.end(payload);
   return { id, jobPath };
 }
 
@@ -510,7 +521,7 @@ async function handleChat(res, body) {
             recordMetrics(reqModel, Date.now() - reqStart, "error");
             return;
           }
-          setTimeout(poll, 250);
+          setTimeout(poll, 100);
         } catch (e) {
           try { res.end(); } catch (_) {}
         }

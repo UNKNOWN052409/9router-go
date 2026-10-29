@@ -155,6 +155,35 @@ equivalent (known prefixes are stripped). Prefixes only matter when routing
 through a multi-provider router, and even there the router decides — this
 project adds no prefix requirement of its own.
 
+## Performance & production behaviour (measured 2026-10-30)
+
+**Direct routing — the router hop costs ~0.** The shim does not wait for the
+queue sweep: every job is POSTed straight to the worker's direct-run endpoint
+(127.0.0.1:20194) and starts the same millisecond; the file queue remains
+only as a fallback for an unreachable worker, with an in-flight dedup so a
+job can never run twice. Result-detection polling dropped 500→150 ms and
+stream tailing 250→100 ms. Measured on the live chain: sequential requests
+went from ~6.3 s to **1.8–2.5 s** end to end; the remaining time is the
+upstream model itself, not the routing (six parallel requests complete in
+~16 s total).
+
+**Stuck-work protection.** The persistent serve's calls carry a 120 s
+timeout — a wedged upstream no longer hangs a job until the shim's 180 s
+wait (the reported "first token after 3 minutes"): the serve is killed and
+rebooted and the job falls back to the spawn path. Spawn-path timeouts
+tree-kill the CLI (`taskkill /T`), so no orphaned opencode children pile up.
+
+**Process hygiene (auto-clean).** The watchdog (every 2 min) now also keeps
+exactly ONE 9router node process owning port 20128 — zombie `cli.js` leftovers
+and extra custom-server instances that lost the bind race are killed — reaps
+stuck `opencode run` children older than 10 minutes, and sweeps result files
+whose waiter timed out over an hour ago.
+
+**The `oc/` lane is the lane.** All free-model traffic runs through the
+built-in no-auth `opencode` provider reset shim; the older `ocz2` wiring is
+retired (its prefix is still tolerated on input and stripped, nothing routes
+to it).
+
 ## Metrics
 
 `GET /v1/metrics` returns dependency-free JSON: request totals, ok/error/

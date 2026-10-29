@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 /**
- * opencode CLI job runner — file-queue worker.
+ * opencode CLI job runner — file-queue worker with a direct HTTP fast path.
  *
- * Polls D:\scratch\oc-cli-api\jobs\ for *.job files
- *   { "id": "...", "prompt": "...", "model": "..." }
- * and for each one runs the REAL opencode CLI (a fresh session AND a fresh
+ * Two ways a job arrives:
+ *   1. DIRECT (production path): the shim POSTs {id, prompt, model, attach}
+ *      to POST /run on 127.0.0.1:20194 — the job starts the same millisecond,
+ *      no sweep wait. The result is still written to <id>.out.json so the
+ *      shim's existing waiter picks it up unchanged.
+ *   2. FILE QUEUE (fallback): *.job files in <data>\jobs are swept every
+ *      700ms — covers a shim older than the HTTP endpoint, or a direct POST
+ *      that failed.
+ *
+ * For each job it runs the REAL opencode CLI (a fresh session AND a fresh
  * project directory per job — the free tier buckets usage per project, so a
  * new path is a new bucket) and writes the result to <id>.out.json:
  *   { "text": "...", "error": null }
@@ -15,7 +22,8 @@
  * path. Job ids are validated against /^[a-z0-9-]{1,64}$/ AND every derived
  * path is resolved and checked to stay inside the jobs directory.
  */
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
+const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -293,7 +301,13 @@ const args = selectArgv(model).concat(attachArgs);
     let errored = null;
     const timer = setTimeout(() => {
       errored = "timeout";
-      try { child.kill(); } catch (_) {}
+      // Tree-kill: the CLI spawns its own children; a bare kill() leaves
+      // them running as orphans (the process mob the user asked cleaned).
+      if (process.platform === "win32" && child.pid) {
+        try { execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], () => {}); } catch (_) {}
+      } else {
+        try { child.kill(); } catch (_) {}
+      }
     }, TIMEOUT_MS);
 
     child.stdout.on("data", (chunk) => {
@@ -352,21 +366,19 @@ function cleanupRunDir(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
 }
 
-function handleJobFile(file) {
-  const base = file.replace(/\.job$/i, "");
-  const jobPath = jobFilePath(base, ".job");
-  if (!jobPath || !fs.existsSync(jobPath)) return;
-  // Read then IMMEDIATELY unlink: the sweep re-runs every 700ms and must not
-  // pick this job up again while the (slow) CLI run is in flight.
-  let job;
-  try { job = JSON.parse(fs.readFileSync(jobPath, "utf8")); } catch (e) {
-    log(base, "bad job file:", String(e).slice(0, 80));
-    try { fs.unlinkSync(jobPath); } catch (_) {}
-    return;
-  }
-  try { fs.unlinkSync(jobPath); } catch (_) {}
+// Core job execution shared by both arrival paths (direct HTTP and the file
+// queue): whitelist-gates the model, runs the job with transient-retry, and
+// writes <id>.out.json plus streaming partials exactly as the shim expects.
+// The in-flight set dedupes the two arrival paths: a job id handed over by
+// the shim's direct POST must not also be picked up by the queue sweep
+// (single event loop, so the check-and-add below is race-free).
+const inflight = new Set();
+
+function processJob(job, base) {
+  if (inflight.has(base)) { log(base, "skipped — already in flight (dedup)"); return; }
+  inflight.add(base);
   const outPath = jobFilePath(base, ".out.json");
-  if (!outPath) return;
+  if (!outPath) { inflight.delete(base); return; }
   // Streaming partials: every text delta the CLI emits is appended here so
   // the shim can forward real-time SSE chunks to its client.
   const partialPath = partialPathFor(base);
@@ -384,7 +396,7 @@ function handleJobFile(file) {
 
   // Rotating-exit reality: a fresh ProxyRise IP can land on an edge that
   // answers a transient 401/429/5xx for the same key. Retry with a new
-  // session (and thus a new exit) up to 3 times before giving up.
+  // session (and thus a new exit) up to 6 times before giving up.
   const attempt = (n) => {
     runJob(String(job.prompt || "hello"), model, Number(job.attach) || 0, (delta) => {
       if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
@@ -402,9 +414,26 @@ function handleJobFile(file) {
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
         log(base, "done, chars=" + result.text.length, result.error ? "error=" + result.error.slice(0, 80) : "");
       } catch (e) { log(base, "write result failed:", String(e).slice(0, 80)); }
+      inflight.delete(base);
     });
   };
   attempt(1);
+}
+
+function handleJobFile(file) {
+  const base = file.replace(/\.job$/i, "");
+  const jobPath = jobFilePath(base, ".job");
+  if (!jobPath || !fs.existsSync(jobPath)) return;
+  // Read then IMMEDIATELY unlink: the sweep re-runs every 700ms and must not
+  // pick this job up again while the (slow) CLI run is in flight.
+  let job;
+  try { job = JSON.parse(fs.readFileSync(jobPath, "utf8")); } catch (e) {
+    log(base, "bad job file:", String(e).slice(0, 80));
+    try { fs.unlinkSync(jobPath); } catch (_) {}
+    return;
+  }
+  try { fs.unlinkSync(jobPath); } catch (_) {}
+  processJob(job, base);
 }
 
 function sweep() {
@@ -437,6 +466,35 @@ function main() {
   // pay the boot cost (and never trips the gateway's 30s response timeout).
   serveUp();
   setInterval(sweep, 700);
+  // DIRECT routing endpoint: the shim POSTs the job here and it starts the
+  // same millisecond — no sweep wait (the queue stays as the fallback).
+  // 127.0.0.1 only, no auth surface beyond loopback, ids whitelist-validated.
+  const runServer = http.createServer((req, res) => {
+    if (req.method !== "POST" || !/^\/run\/?$/.test(req.url || "")) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end('{"error":"not found"}');
+      return;
+    }
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("error", () => {});
+    req.on("end", () => {
+      let job = {};
+      try { job = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch (_) {}
+      const base = typeof job.id === "string" ? job.id : "";
+      if (!SAFE_ID.test(base) || typeof job.prompt !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end('{"error":"bad job"}');
+        return;
+      }
+      processJob(job, base);
+      res.writeHead(202, { "Content-Type": "application/json" });
+      res.end('{"ok":true}');
+    });
+  });
+  runServer.listen(20194, "127.0.0.1", () => {
+    log("direct-run endpoint listening on http://127.0.0.1:20194/run");
+  });
 }
 // Exports for unit tests (CI): pure functions only — no polling started.
 module.exports = { jobFilePath, partialPathFor, runDirFor, selectArgv, SAFE_ID, MODEL_RUN_ARGS, ATTACH_EXTS };
