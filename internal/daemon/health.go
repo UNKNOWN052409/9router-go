@@ -45,12 +45,19 @@ var healthClient = &http.Client{Timeout: 2 * time.Second}
 func waitHealthy(url string, pid int) error {
 	deadline := time.Now().Add(StartupTimeout)
 	target := strings.TrimSuffix(url, "/") + HealthPath
+	// IPv6 loopback twin of the primary target. A documented deployment
+	// shares the port: a proxy bound only to 127.0.0.1 answers the primary
+	// address on behalf of the wildcard-bound child, so its /health never
+	// reflects the daemon and the start would time out. ::1 has no squatter
+	// and reaches the child directly; empty when the target is not a
+	// 127.0.0.1 URL, in which case probeHealthy("") just fails.
+	twin := ipv6LoopbackTarget(target)
 
 	for {
 		if !proc.Alive(pid) {
 			return fmt.Errorf("daemon.Start: process %d exited before becoming ready — see %s", pid, LogPath())
 		}
-		if probeHealthy(target) {
+		if probeHealthy(target) || probeHealthy(twin) {
 			return nil
 		}
 		if bindFailureSeen() {
@@ -61,6 +68,16 @@ func waitHealthy(url string, pid int) error {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+}
+
+// ipv6LoopbackTarget rewrites a http://127.0.0.1:port URL to its
+// http://[::1]:port twin; anything else returns "".
+func ipv6LoopbackTarget(target string) string {
+	rest, ok := strings.CutPrefix(target, "http://127.0.0.1:")
+	if !ok {
+		return ""
+	}
+	return "http://[::1]:" + rest
 }
 
 // startupLogScanBytes bounds what one bind-failure poll reads off the end of
