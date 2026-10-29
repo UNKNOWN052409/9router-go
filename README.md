@@ -74,8 +74,9 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 
 ## ⚡ Quick Start
 
-**1. Build** — this fork publishes no release binaries yet, so the one-line
-installers (release-gated) wait until the first release is published:
+**1. Install or build.** Release binaries are published from this repo
+(`v1.9.15` onwards), so the one-line installers work; building from source
+is the alternative:
 
 ```bash
 git clone https://github.com/UNKNOWN052409/9router-go.git
@@ -87,7 +88,7 @@ make build       # embeds VERSION into the Go binary
 🎉 Then start it (defaults: port `20130`, data `~/.9router` — no flags needed):
 
 ```bash
-./9router-go
+9router-go
 # Dashboard: http://localhost:20130 (Default password: 123456)
 ```
 
@@ -104,7 +105,6 @@ curl -fsSL https://raw.githubusercontent.com/UNKNOWN052409/9router-go/main/insta
 irm https://raw.githubusercontent.com/UNKNOWN052409/9router-go/main/install.ps1 | iex
 ```
 
-Until then they exit with "download failed — check releases".
 </details>
 > **Already using upstream [9Router](https://github.com/decolua/9router)?** Point 9router-go at the same data dir — it opens the **same `DATA_DIR/db/data.sqlite`**. Your providers, connections, combos, API keys, and usage history carry over as-is. No import step, no migration. See [Sharing a database with 9Router](#-sharing-a-database-with-9router) for the caveats.
 
