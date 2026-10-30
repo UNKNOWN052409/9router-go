@@ -288,6 +288,70 @@ function parseToolCall(text) {
   return calls.length ? calls[0] : null;
 }
 
+// ---------------------------------------------------------------------------
+// PASSIVE TOOLS LAYER — built-in tools the model can use even when the client
+// sent none. The tool loop runs entirely inside the shim: the model's call is
+// executed HERE (web search hits DuckDuckGo's HTML endpoint; datetime is
+// local), the result is appended to the conversation, and a fresh CLI pass
+// answers with it. Client-supplied tools always take precedence: when the
+// request carries tools, the passive layer stays out entirely. Non-stream
+// requests only (streaming with a hidden first pass would leak the protocol
+// JSON into content deltas). OC_PASSIVE_TOOLS=0 disables the layer.
+// ---------------------------------------------------------------------------
+const PASSIVE_TOOLS = [
+  { type: "function", function: {
+    name: "web_search",
+    description: "Search the public web and return the top results (title, url, snippet). Use for anything current, factual or beyond your knowledge.",
+    parameters: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] },
+  } },
+  { type: "function", function: {
+    name: "current_datetime",
+    description: "Returns today's date and the current local time.",
+    parameters: { type: "object", properties: {} },
+  } },
+];
+const PASSIVE_LOOP_MAX = 3;
+const passiveEnabled = () => process.env.OC_PASSIVE_TOOLS !== "0";
+
+function stripTags(html) {
+  return String(html || "").replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+async function executeWebSearch(query) {
+  const url = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(String(query || "").slice(0, 400));
+  const res = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "text/html" } });
+  if (!res.ok) return "web_search error: upstream " + res.status;
+  const html = await res.text();
+  const results = [];
+  const re = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) && results.length < 5) {
+    let href = m[1];
+    const uddg = href.match(/uddg=([^&]+)/);
+    if (uddg) href = decodeURIComponent(uddg[1]);
+    results.push({ title: stripTags(m[2]), url: href });
+  }
+  const snips = [...html.matchAll(/<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g)].slice(0, results.length);
+  snips.forEach((s, i) => { results[i].snippet = stripTags(s[1]).slice(0, 300); });
+  if (!results.length) return "web_search: no results for " + JSON.stringify(String(query).slice(0, 120));
+  return results.map((r, i) => (i + 1) + ". " + r.title + "\n   " + r.url + (r.snippet ? "\n   " + r.snippet : "")).join("\n");
+}
+
+async function executePassiveTool(call) {
+  if (call.name === "current_datetime") {
+    return new Date().toString();
+  }
+  if (call.name === "web_search") {
+    try { return await executeWebSearch(call.arguments.query); }
+    catch (e) { return "web_search error: " + String(e && e.message || e).slice(0, 160); }
+  }
+  return null;
+}
+
+const isPassiveTool = (name) => name === "web_search" || name === "current_datetime";
+
 function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasoningEffort) {
   const turns = [];
   for (const msg of Array.isArray(messages) ? messages : []) {
@@ -345,7 +409,15 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
   // tool definitions), so it is appended AFTER the conversation and gets
   // trimmed first when the total exceeds the cap — the reverse order
   // amputated the user's context and made the model answer generically.
-  const proto = buildToolsProtocol(tools, toolChoice);
+  // Passive tools: when the client sent none, advertise the built-ins
+  // (web_search, current_datetime) so the model knows it can call them —
+  // the shim executes the call and re-runs the turn with the result.
+  let effectiveTools = tools;
+  let effectiveChoice = toolChoice;
+  if (!Array.isArray(tools) || !tools.length) {
+    if (passiveEnabled()) effectiveTools = PASSIVE_TOOLS;
+  }
+  const proto = buildToolsProtocol(effectiveTools, effectiveChoice);
   const budget = Math.max(MAX_PROMPT_CHARS - proto.length - 64, 4000);
   if (out.length > budget) out = out.slice(0, budget) + "\n...[earlier context truncated]";
   if (proto) {
@@ -531,8 +603,32 @@ async function handleChat(res, body) {
     return;
   }
 
-  // Non-stream: wait for the final result.
-  const result = await waitForResult(job.id);
+  // Non-stream: wait for the final result. When the client sent NO tools and
+  // the passive layer is on, a built-in tool call (web_search, …) is executed
+  // right here and the conversation is re-run with the result — the client
+  // just sees the final answer.
+  let result = await waitForResult(job.id);
+  if (passiveEnabled() && !toolsPresent) {
+    for (let hop = 0; hop < PASSIVE_LOOP_MAX; hop++) {
+      const calls = parseToolCalls(result.text || "").filter((c) => isPassiveTool(c.name));
+      if (!calls.length) break;
+      log("passive tool hop " + (hop + 1) + ":", calls.map((c) => c.name + JSON.stringify(c.arguments)).join(" | ").slice(0, 200));
+      const turns = [];
+      for (const call of calls) {
+        const out = await executePassiveTool(call);
+        turns.push("[Tool result for " + call.name + "]" + String.fromCharCode(10) + String(out));
+      }
+      const followup = buildPrompt(
+        parsed.messages.concat([{ role: "assistant", content: result.text }, { role: "tool", name: calls[0].name, content: turns.join(String.fromCharCode(10) + String.fromCharCode(10)) },
+          { role: "user", content: "Continue using the tool result above. Answer the user's original question now — if you have enough information, answer in plain text (no tool JSON)." }]),
+        null, null, jsonMode, imagePaths, reasoningEffort);
+      let hopJob;
+      try { hopJob = submitJob(followup, reqModel, 0); } catch (e) { break; }
+      const next = await waitForResult(hopJob.id);
+      if (next.error && !next.text) break;
+      result = next;
+    }
+  }
   const errText = result.error || "";
   const text = result.text || "";
   recordMetrics(reqModel, Date.now() - reqStart, errText && !text ? (/429|FreeUsageLimit|limit/i.test(errText) ? "limit" : "error") : "ok");
@@ -641,7 +737,7 @@ const server = http.createServer((req, res) => {
       data: MODELS.map((m) => ({ id: m, object: "model", owned_by: "opencode-free" })),
     });
   }
-  if (req.method === "POST" && /^\/(v1|inference\/v1)\/chat\/completions$/.test(req.url || "")) {
+  if (req.method === "POST" && /^\/(v1|inference\/v1|inference\/openai\/v1)\/chat\/completions$/.test(req.url || "")) {
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("error", () => {});
