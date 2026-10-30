@@ -385,21 +385,46 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
     else if (role === "assistant") turns.push("[Assistant]\n" + text);
     else turns.push("[User]\n" + text);
   }
-  // Budget first: overflow drops the OLDEST turns, keeps the leading
-  // [System] turn and the most recent conversation (measured live: a
-  // 599,969-char IDE request sailed through the old head-keeping cap at
-  // 444k tokens and the CLI timed out on every attempt).
+  // Budget first. For BIG agentic coding tasks the space hogs are OLD TOOL
+  // RESULTS (whole file reads, command dumps) — not the conversation. Three
+  // compaction passes, in order of least information loss:
+  //   1. compact every tool result except the LAST 3 to a 300-char preview
+  //      (the files are still on disk — the agent can re-read them);
+  //   2. a gigantic leading [System] turn is truncated to its head (the
+  //      preamble is what matters), always leaving room for recent turns;
+  //   3. only then are the oldest remaining turns dropped entirely.
+  // Measured live: a 599,969-char IDE request at 444k tokens timed the CLI
+  // out on every attempt; the compacted envelope answers.
   const protoEarly = buildToolsProtocol(
     (!Array.isArray(tools) || !tools.length) && passiveEnabled() ? PASSIVE_TOOLS : tools,
     toolChoice
   );
   const budget = Math.max(MAX_PROMPT_CHARS - protoEarly.length - 512, 40000);
+  const toolIdx = [];
+  turns.forEach((t, i) => { if (t.startsWith("[Tool result for ")) toolIdx.push(i); });
+  const keepFull = new Set(toolIdx.slice(-3));
+  const compacted = turns.map((t, i) => {
+    if (!t.startsWith("[Tool result for ") || keepFull.has(i) || t.length <= 600) return t;
+    const nl = t.indexOf("\n");
+    const omitted = t.length - nl - 300;
+    return t.slice(0, nl + 1) + t.slice(nl + 1, nl + 301) + "\n...[older tool result truncated, " + omitted + " chars omitted — the file is still on disk, re-read if needed]";
+  });
+  const head = compacted.length && compacted[0].startsWith("[System]") ? compacted[0] : null;
+  const pool = head ? compacted.slice(1) : compacted;
   let kept = [];
   let keptCount = 0;
   let used = 0;
-  const head = turns.length && turns[0].startsWith("[System]") ? turns[0] : null;
-  const pool = head ? turns.slice(1) : turns;
-  if (head && head.length + 8 <= budget) { kept.push(head); used = head.length + 8; }
+  const tailReserve = Math.min(30000, Math.floor(budget / 4));
+  if (head) {
+    if (head.length + 8 <= budget - tailReserve) {
+      kept.push(head);
+      used = head.length + 8;
+    } else if (budget - tailReserve > 4000) {
+      const headBudget = budget - tailReserve;
+      kept.push(head.slice(0, headBudget) + "\n...[system context truncated]");
+      used = headBudget + 8;
+    }
+  }
   for (let i = pool.length - 1; i >= 0; i--) {
     const cost = pool[i].length + 8;
     if (used + cost > budget) break;

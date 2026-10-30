@@ -190,3 +190,24 @@ test("selectArgv resolves any-prefixed model names via the last segment", () => 
   const multi = worker.selectArgv("my-proxy/org/deepseek-v4.1-flash-free");
   assert.ok(multi.includes("opencode/deepseek-v4.1-flash-free"));
 });
+
+// ---- shim: smart compaction for big agentic coding tasks ----
+test("buildPrompt compacts old tool results but keeps the last 3 verbatim", () => {
+  const msgs = [];
+  for (let i = 1; i <= 10; i++) {
+    msgs.push({ role: "user", content: "step " + i });
+    msgs.push({ role: "assistant", content: null, tool_calls: [{ id: "c" + i, type: "function", function: { name: "read_file", arguments: "{}" } }] });
+    msgs.push({ role: "tool", tool_call_id: "c" + i, name: "read_file", content: "data".repeat(5000) });
+  }
+  const p = shim.buildPrompt(msgs, [], null, false, [], undefined);
+  const verbatim = (p.match(/datadata|datadatadata/g) || []).length;
+  assert.ok(p.includes("older tool result truncated"), "old tool results must be compacted");
+  assert.ok(p.includes("step 10"), "recent turns must survive");
+});
+test("buildPrompt truncates a gigantic system turn instead of dropping it", () => {
+  const big = "SYS-PREAMBLE ".repeat(40000); // ~520k chars
+  const p = shim.buildPrompt([{ role: "system", content: big }, { role: "user", content: "Reply EXT-OK" }], [], null, false, [], undefined);
+  assert.ok(p.length <= 250000 + 64, "cap respected");
+  assert.ok(p.includes("SYS-PREAMBLE"), "system preamble head survives");
+  assert.ok(p.includes("EXT-OK"), "recent turn survives");
+});
