@@ -419,6 +419,16 @@ function processJob(job, base) {
     }).then((result) => {
       const err = result.error || "";
       const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network/i.test(err);
+      // An EMPTY success is also transient: glm occasionally returns a
+      // zero-char completion with no error (measured live), which a chat
+      // client renders as nothing at all. Retry — a fresh session usually
+      // answers normally.
+      if (!err && !result.text && n < 3) {
+        log(base, "attempt " + n + " empty completion — retrying");
+        if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        setTimeout(() => attempt(n + 1), 1500);
+        return;
+      }
       if (err && transient && n < 6) {
         log(base, "attempt " + n + " transient (" + err.slice(0, 500) + ") — retrying");
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
@@ -504,6 +514,10 @@ function main() {
         return;
       }
       processJob(job, base);
+      // The shim keeps the .job on disk as its queue fallback; now that the
+      // direct path has accepted it, the copy is dead weight — the sweep
+      // would only find it again and log a dedup skip. Remove it.
+      try { const jp = jobFilePath(base, ".job"); if (jp) fs.unlinkSync(jp); } catch (_) {}
       res.writeHead(202, { "Content-Type": "application/json" });
       res.end('{"ok":true}');
     });
