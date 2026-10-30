@@ -20,7 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const PORT = 20142;
+const PORT = parseInt(process.env.PORT || "20142", 10);
 const HOST = "127.0.0.1";
 // Data root matches the worker's derivation (OC_DATA_DIR env overrides);
 // keeping both sides on the same root is what makes the file-queue work.
@@ -65,7 +65,7 @@ function normalizeModel(raw) {
   if (hit3) return hit3;
   return m;
 }
-const WAIT_MS = 180000;
+const WAIT_MS = parseInt(process.env.OC_WAIT_MS || "900000", 10); // must cover the worker's scaled timeout
 const POLL_MS = 150;
 const MAX_PROMPT_CHARS = 250000;
 
@@ -509,6 +509,58 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
+// ---------------------------------------------------------------------------
+// CHUNKED GENERATION for large inputs. Measured live: the free-tier glm lane
+// RESETS the connection on inputs beyond ~10-15k chars when a long output is
+// requested (direct CLI probe: APIError "Connection reset by server", zero
+// output after 13 minutes). No timeout fixes that — the only working shape is
+// MULTIPLE SMALL PASSES. Large user content is split at paragraph boundaries
+// into <=4000-char chunks; each chunk is processed in its own CLI run (each
+// individually proven to complete), and the outputs are stitched in order.
+// Auto-engages for transformation tasks (translate/summarize/convert) on
+// tool-less requests over 8000 chars; forced on with "split": true.
+// ---------------------------------------------------------------------------
+const CHUNK_THRESHOLD = 8000;
+const CHUNK_SIZE = 4000;
+
+function looksLikeTransformation(text) {
+  return /translat|summari[sz]|convert|अनुवाद|paraphras|rewrite/i.test(text.slice(0, 800));
+}
+
+function splitContent(text, size) {
+  const parts = [];
+  const paras = String(text).split(/\n\n+/);
+  let cur = "";
+  for (const para of paras) {
+    if ((cur + "\n\n" + para).length > size && cur) { parts.push(cur); cur = para; }
+    else cur = cur ? cur + "\n\n" + para : para;
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+
+function continuationPrompt(instruction, chunk, index, total) {
+  return instruction + "\n\n[SECTION " + (index + 1) + " OF " + total + "] Translate/process this section completely:\n\n" + chunk +
+    "\n\n[SYSTEM] This is section " + (index + 1) + " of " + total + " of one continuous document. Output ONLY the translated/processed text of THIS section - no headings, no notes, no \"Section N\" markers.";
+}
+
+async function runChunked(instruction, content, model, imagePaths) {
+  const chunks = splitContent(content, CHUNK_SIZE);
+  log("chunked generation:", chunks.length, "chunks from", content.length, "chars");
+  const parts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const p = buildPrompt([{ role: "user", content: continuationPrompt(instruction, chunks[i], i, chunks.length) }], null, null, false, imagePaths && i === 0 ? imagePaths : null, null);
+    let job;
+    try { job = submitJob(p, model, i === 0 ? (imagePaths ? imagePaths.length : 0) : 0); }
+    catch (e) { throw new Error("chunk job submit failed: " + String(e)); }
+    const r = await waitForResult(job.id);
+    if (r.error && !r.text) throw new Error("chunk " + (i + 1) + " failed: " + r.error);
+    parts.push((r.text || "").trim());
+    log("chunk " + (i + 1) + "/" + chunks.length + " done:", (r.text || "").length, "chars");
+  }
+  return parts.join("\n\n");
+}
+
 async function handleChat(res, body) {
   let parsed;
   try { parsed = JSON.parse(body || "{}"); } catch (_) { parsed = {}; }
@@ -525,6 +577,52 @@ async function handleChat(res, body) {
   const reasoningEffort = String(parsed.reasoning_effort || (parsed.reasoning && parsed.reasoning.effort) || "").toLowerCase();
   const imagePaths = saveImageAttachments(parsed.messages);
   if (imagePaths.length) log("images attached:", imagePaths.length);
+  // CHUNKED GENERATION: large tool-less transformation requests go through
+  // multi-pass processing (single passes reset upstream beyond ~10-15k chars).
+  const lastUser = [...(parsed.messages || [])].reverse().find((m) => m.role === "user");
+  const lastUserText = typeof (lastUser || {}).content === "string" ? lastUser.content
+    : Array.isArray((lastUser || {}).content) ? (lastUser.content.filter((c) => c.type === "text").map((c) => c.text).join("\n")) : "";
+  const noClientTools = !Array.isArray(parsed.tools) || !parsed.tools.length;
+  const wantsSplit = parsed.split === true;
+  const autoChunk = noClientTools && lastUserText.length > CHUNK_THRESHOLD && looksLikeTransformation(lastUserText);
+  if (noClientTools && (wantsSplit || autoChunk) && lastUserText.length > CHUNK_THRESHOLD) {
+    const instruction = lastUserText.split("\n\n")[0] || "Process the following text completely.";
+    const content = lastUserText;
+    const stream = parsed.stream === true;
+    const created = Math.floor(Date.now() / 1000);
+    const id = "chatcmpl-occli-" + Date.now().toString(36);
+    const reqStart = Date.now();
+    log("CHUNKED generation engaged:", lastUserText.length, "chars,", stream ? "(stream)" : "");
+    if (stream) {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] }) + "\n\n");
+    }
+    let stitched = "";
+    let chunkErr = null;
+    try {
+      stitched = await runChunked(instruction, content, normalizeModel(parsed.model), imagePaths);
+    } catch (e) { chunkErr = String(e).slice(0, 300); }
+    recordMetrics(normalizeModel(parsed.model), Date.now() - reqStart, chunkErr ? "error" : "ok");
+    if (stream) {
+      res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, delta: { content: chunkErr ? ("chunked generation failed: " + chunkErr) : stitched }, finish_reason: null }] }) + "\n\n");
+      res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + "\n\n");
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } else if (chunkErr) {
+      sendJson(res, 502, { error: { message: chunkErr, type: "upstream_error" } });
+    } else {
+      const out = jsonMode ? stripJsonFences(stitched) : stitched;
+      sendJson(res, 200, {
+        id, object: "chat.completion", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, message: { role: "assistant", content: out }, finish_reason: "stop" }],
+        usage: { prompt_tokens: Math.ceil(lastUserText.length / 4), completion_tokens: Math.ceil(stitched.length / 4), total_tokens: 0 },
+      });
+    }
+    return;
+  }
   const prompt = buildPrompt(parsed.messages, parsed.tools, parsed.tool_choice, jsonMode, imagePaths, reasoningEffort);
   // Tool-call parsing runs ONLY when the request carried tools: a plain chat
   // answer that happens to contain JSON must stay a text answer.
