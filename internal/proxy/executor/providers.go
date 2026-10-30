@@ -714,8 +714,17 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	// there (upstream quirks.reasoningAliasFields).
 	req.LiftReasoningAliases = true
 	// opencode Chat Completions path: same conceal + restore of tool names.
-	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
-	body = translator.ApplyFingerprintSystemPrompt(body)
+	// When the request is being routed to the local reset shim, the shim
+	// builds its own CLI prompt — the v2 gate's fingerprint shaping (12
+	// built-in tool declarations + the harness preamble) is shim-side work,
+	// and forwarding it here would double it: 18k chars of protocol the shim
+	// wraps AGAIN and the model drowns in. Plain passthrough keeps the
+	// client's own body intact.
+	toolNameMap := map[string]string{}
+	if !isResetShimBaseURL(req.Config.BaseURL) {
+		body, toolNameMap = translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+		body = translator.ApplyFingerprintSystemPrompt(body)
+	}
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 	// Strict models wrap caller tool calls as execute/CALL_TOOL; hand the
@@ -802,6 +811,13 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 // same migration, so the rewrite keys off the prefix rather than the host. A
 // base with no zen prefix — a custom endpoint, or the registry default that
 // already points at /inference/openai/v1 — is returned untouched.
+// isResetShimBaseURL reports whether the opencode lane is pointed at the
+// local reset shim (OPENCODE_FREE_BASEURL), which assembles its own
+// fingerprint-compliant CLI prompt — the gateway must not re-shape the body.
+func isResetShimBaseURL(baseURL string) bool {
+	return strings.Contains(baseURL, "127.0.0.1:20142") || strings.Contains(baseURL, "localhost:20142")
+}
+
 func opencodeInferenceBase(base string) string {
 	base = strings.TrimRight(base, "/")
 	base = strings.TrimSuffix(base, "/chat/completions")
