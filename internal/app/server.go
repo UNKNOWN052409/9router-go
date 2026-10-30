@@ -16,6 +16,7 @@ import (
 	"9router/proxy/internal/config"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/chat"
+	"9router/proxy/internal/handlers/dashboard"
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/proxy/oauth"
@@ -128,6 +129,10 @@ func ProvideServer(p ServerParams) *http.Server {
 
 			fmt.Fprintf(os.Stdout, "\n  🚀 9router-go Proxy (%s) on %s\n\n", updater.CurrentVersion, addr)
 			log.Printf("Server is ready to handle requests at %s", addr)
+			// A tunnel the operator connected from the dashboard comes back
+			// with the gateway: enabled + a stored token re-launches the
+			// connector, so the domain is up again on every start.
+			dashboard.StartCloudflaredFromSettings(p.Repo)
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {

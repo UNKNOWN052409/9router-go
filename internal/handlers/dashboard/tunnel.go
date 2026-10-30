@@ -5,6 +5,8 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"9router/proxy/internal/config"
+	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlerutil"
 )
 
@@ -38,7 +41,6 @@ var (
 		return exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	}
 )
-
 
 // findTailscaleBin searches for the tailscale executable across PATH and well-known locations.
 func findTailscaleBin() string {
@@ -119,6 +121,11 @@ func (h *DashboardHandler) HandleTunnelStatus(w http.ResponseWriter, r *http.Req
 
 	tunnelEnabled, _ := raw["tunnelEnabled"].(bool)
 	tunnelURL, _ := raw["tunnelUrl"].(string)
+	tunnelDomain, _ := raw["tunnelDomain"].(string)
+	if tunnelDomain != "" && tunnelURL == "" {
+		tunnelURL = "https://" + tunnelDomain
+	}
+	tunnelEnabled = tunnelEnabled && CloudflaredRunning()
 
 	tailscaleEnabled, _ := raw["tailscaleEnabled"].(bool)
 	tailscaleURL, _ := raw["tailscaleUrl"].(string)
@@ -146,7 +153,7 @@ func (h *DashboardHandler) HandleTunnelStatus(w http.ResponseWriter, r *http.Req
 			"tunnelUrl":       tunnelURL,
 			"shortId":         "",
 			"publicUrl":       tunnelURL,
-			"running":         tunnelEnabled && tunnelURL != "",
+			"running":         tunnelEnabled && CloudflaredRunning(),
 		},
 		"tailscale": map[string]any{
 			"enabled":         tailscaleEnabled,
@@ -162,17 +169,78 @@ func (h *DashboardHandler) HandleTunnelStatus(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// HandleTunnelEnable handles POST /api/tunnel/enable.
+// HandleTunnelEnable handles POST /api/tunnel/enable — the dashboard's
+// Connect Domain flow. Body: {"token": "<cloudflared connector token>",
+// "domain": "chat.example.com" (optional, display only)}. The token persists
+// in settings, so StartCloudflaredFromSettings brings the domain back on
+// every gateway start.
 func (h *DashboardHandler) HandleTunnelEnable(w http.ResponseWriter, r *http.Request) {
-	writePlainError(w, http.StatusBadRequest, "Cloudflare Tunnel service is not yet supported in 9router-go. Use an external reverse proxy (e.g. ngrok, cloudflared, or caddy) pointing to http://127.0.0.1:20130")
+	var body struct {
+		Token  string `json:"token"`
+		Domain string `json:"domain"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil || json.Unmarshal(raw, &body) != nil {
+		writePlainError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	token := strings.TrimSpace(body.Token)
+	domain := strings.TrimSpace(body.Domain)
+	domain = strings.TrimPrefix(strings.TrimPrefix(domain, "https://"), "http://")
+	domain = strings.TrimSuffix(domain, "/")
+	if len(token) < 20 {
+		writePlainError(w, http.StatusBadRequest, "a cloudflared tunnel token is required (Cloudflare Zero Trust → Tunnels → copy the tunnel's token)")
+		return
+	}
+	if err := StartCloudflared(token); err != nil {
+		writePlainError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	settings := map[string]any{
+		"tunnelEnabled": true,
+		"tunnelToken":   token,
+	}
+	if domain != "" {
+		settings["tunnelDomain"] = domain
+	}
+	_ = h.Repo.UpdateSettingsRaw(settings)
+	publicURL := ""
+	if domain != "" {
+		publicURL = "https://" + domain
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"success":   true,
+		"publicUrl": publicURL,
+		"running":   CloudflaredRunning(),
+	})
 }
 
-// HandleTunnelDisable handles POST /api/tunnel/disable.
+// HandleTunnelDisable handles POST /api/tunnel/disable — stops the connector
+// but keeps the token, so re-enabling is a single click without re-pasting.
 func (h *DashboardHandler) HandleTunnelDisable(w http.ResponseWriter, r *http.Request) {
+	StopCloudflared()
 	_ = h.Repo.UpdateSettingsRaw(map[string]any{
 		"tunnelEnabled": false,
 	})
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// StartCloudflaredFromSettings re-launches the saved tunnel connector. The
+// server's ready hook calls this on every boot: tunnelEnabled + a stored
+// token means the operator's domain comes back up with the gateway.
+func StartCloudflaredFromSettings(repo *db.Repo) {
+	raw, err := repo.GetSettingsRaw()
+	if err != nil || raw == nil {
+		return
+	}
+	enabled, _ := raw["tunnelEnabled"].(bool)
+	token, _ := raw["tunnelToken"].(string)
+	if !enabled || len(strings.TrimSpace(token)) < 20 {
+		return
+	}
+	if err := StartCloudflared(strings.TrimSpace(token)); err != nil {
+		log.Printf("tunnel autostart: %v", err)
+	}
 }
 
 // HandleTailscaleCheck handles GET /api/tunnel/tailscale-check.

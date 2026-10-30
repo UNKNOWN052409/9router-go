@@ -1406,6 +1406,26 @@ var KnownProviders = map[string]ProviderConfig{
 	},
 }
 
+// init applies operator overrides the registry cannot know: the opencode
+// free lane can be pointed at a local reset shim (OPENCODE_FREE_BASEURL,
+// e.g. http://127.0.0.1:20142/inference/v1/chat/completions), which runs the
+// real CLI per request for fresh-quota semantics. Applied at init so every
+// reader of KnownProviders — all executors, the models list, connection
+// validation — sees the override, and BEFORE any request resolves a URL.
+func init() {
+	if u := strings.TrimSpace(os.Getenv("OPENCODE_FREE_BASEURL")); u != "" {
+		if cfg, ok := KnownProviders["opencode"]; ok {
+			cfg.BaseURL = u
+			// The shim speaks plain OpenAI; the CLI-fingerprint headers would
+			// misdescribe it, and NoAuth keeps the "public" default key out.
+			cfg.StaticHeaders = nil
+			cfg.NoAuth = true
+			cfg.DefaultAPIKey = "public"
+			KnownProviders["opencode"] = cfg
+		}
+	}
+}
+
 // RetryableStatusCodes are HTTP status codes that trigger account fallback.
 var RetryableStatusCodes = map[int]bool{
 	http.StatusUnauthorized:       true, // 401

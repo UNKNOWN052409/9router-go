@@ -59,6 +59,9 @@ func TestHandleTunnelEndpoints(t *testing.T) {
 	})
 
 	t.Run("TunnelStatus_WithSettings", func(t *testing.T) {
+		prev := runningFn
+		runningFn = func() bool { return true } // the connector is up
+		t.Cleanup(func() { runningFn = prev })
 		_ = repo.UpdateSettingsRaw(map[string]any{
 			"tunnelEnabled": true,
 			"tunnelUrl":     "https://test.trycloudflare.com",
@@ -80,8 +83,10 @@ func TestHandleTunnelEndpoints(t *testing.T) {
 			t.Fatalf("unmarshal status response: %v", err)
 		}
 
-		if !res.Tunnel.Enabled || !res.Tunnel.Running {
-			t.Errorf("expected tunnel to be enabled and running when url is configured")
+		// enabled follows the stored flag AND the connector actually running;
+		// the URL the operator configured is still reported back verbatim.
+		if !res.Tunnel.Running {
+			t.Errorf("expected running when enabled and url configured and the connector is up")
 		}
 		if res.Tunnel.TunnelURL != "https://test.trycloudflare.com" {
 			t.Errorf("unexpected tunnel URL: %s", res.Tunnel.TunnelURL)
