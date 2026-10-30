@@ -225,6 +225,15 @@ async function serveChat(prompt, model, files, onPartial) {
   }
   const blob = JSON.stringify(out);
   if (/FreeUsageLimit|429|Invalid API key|Unexpected server error/i.test(blob)) return null;
+  // The CLI can return an UNTRANSLATED upstream stream when the request
+  // overflows the model context (measured live: a 444k-token prompt came back
+  // as raw "event: message_start ... message_stop" Anthropic SSE). That is
+  // not an answer — treat it as transient so retry/fallback runs instead of
+  // shipping protocol JSON to the client.
+  if (/^event:\s*message_start/.test(text) && /message_stop/.test(text)) {
+    log("serve returned untranslated anthropic SSE (context overflow?) — transient");
+    return null;
+  }
   // The serve response carries the session message info (with token counts)
   // when the upstream reported them; forwarded for OpenAI usage mapping.
   const tokens = out.info && out.info.tokens && typeof out.info.tokens === "object" ? out.info.tokens : null;
@@ -349,6 +358,13 @@ const args = selectArgv(model).concat(attachArgs);
       clearTimeout(timer);
       if (errOut.trim()) log("stderr(code=" + code + "):", errOut.slice(0, 300).replace(/\n/g, " "));
       cleanupRunDir(runDir);
+      // Same untranslated-SSE guard as the serve path: an anthropic
+      // message_start/message_stop stream is an upstream failure, not text.
+      if (/^event:\s*message_start/.test(text) && /message_stop/.test(text)) {
+        log("spawn returned untranslated anthropic SSE (context overflow?) — transient");
+        errored = errored || "upstream returned untranslated stream (context overflow)";
+        text = "";
+      }
       const result = { text, error: errored };
       if (tokens) result.tokens = tokens;
       if (reasoning) result.reasoning = reasoning;
