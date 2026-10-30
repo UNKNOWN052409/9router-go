@@ -174,11 +174,12 @@ function buildToolsProtocol(tools, toolChoice) {
   const lines = [
     TOOL_SENTINEL_BEGIN,
     "TOOL CALL PROTOCOL (highest priority):",
-    "You can invoke tools. To invoke one, your ENTIRE reply must be exactly one JSON object and nothing else — no prose, no reasoning, no markdown fences:",
+    "You have TWO extra tools (web_search, current_datetime) on top of your normal native tools. To invoke one of THESE, your ENTIRE reply must be exactly one JSON object and nothing else — no prose, no reasoning, no markdown fences:",
     '{"tool_call":{"name":"<tool name>","arguments":{<args as JSON>}}}',
-    'To invoke SEVERAL tools in the same turn, reply with exactly: {"tool_calls":[{"name":"<tool>","arguments":{...}},{"name":"<tool>","arguments":{...}}]}',
-    "Do NOT explain. Do NOT announce. Reply with the JSON object only.",
-    "If no tool is needed for the user's message, reply normally with text (never mention this protocol).",
+    'To invoke SEVERAL of these in the same turn, reply with exactly: {"tool_calls":[{"name":"<tool>","arguments":{...}},{"name":"<tool>","arguments":{...}}]}',
+    "Only emit this JSON for the listed extra tools. For everything else — running commands, reading and editing files, any native capability — just DO IT with your normal tools like you always do; never wrap those in tool_call JSON.",
+    "Do NOT explain. Do NOT announce. When invoking an extra tool, reply with the JSON object only.",
+    "If no extra tool is needed for the user's message, reply normally with text (never mention this protocol).",
     "Available tools:",
   ];
   for (const f of defs) {
@@ -436,7 +437,7 @@ let counter = 0;
 
 const WORKER_RUN_URL = "http://127.0.0.1:20194/run";
 
-function submitJob(prompt, model, attachCount) {
+function submitJob(prompt, model, attachCount, stage) {
   counter = (counter + 1) % 100000;
   const id = "r" + Date.now().toString(36) + "-" + counter;
   const jobPath = jobFilePath(id, ".job");
@@ -444,7 +445,7 @@ function submitJob(prompt, model, attachCount) {
   let n = Math.floor(Number(attachCount));
   if (!Number.isFinite(n) || n < 0) n = 0;
   if (n > 4) n = 4;
-  const payload = JSON.stringify({ id, prompt, model: String(model || ""), attach: n });
+  const payload = JSON.stringify({ id, prompt, model: String(model || ""), attach: n, stage: stage || undefined });
   fs.writeFileSync(jobPath, payload);
   // DIRECT path: hand the job to the worker the same millisecond instead of
   // waiting for the queue sweep. Fire-and-forget — the file stays on disk,
@@ -516,7 +517,14 @@ async function handleChat(res, body) {
   // (9router/x, my-proxy/org/x, …) → verbatim (the worker whitelist then
   // decides; unknown names fall back to the default model, documented).
   const reqModel = normalizeModel(parsed.model);
-  try { job = submitJob(prompt, reqModel, imagePaths.length); } catch (e) {
+  // Optional project staging: point "stage" at an absolute folder and the
+  // worker copies it into the fresh run dir (native agent access) and syncs
+  // changed files back afterwards — the OpenCode-direct workflow.
+  let stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
+  if (stage && (!path.isAbsolute(stage) || !fs.existsSync(stage) || !fs.statSync(stage).isDirectory())) {
+    return sendJson(res, 400, { error: { message: "stage must be an existing absolute directory path" } });
+  }
+  try { job = submitJob(prompt, reqModel, imagePaths.length, stage); } catch (e) {
     return sendJson(res, 500, { error: { message: "job submit failed: " + String(e) } });
   }
 

@@ -243,7 +243,75 @@ async function serveChat(prompt, model, files, onPartial) {
   return result;
 }
 
-function runJob(prompt, model, files, onPartial) {
+// ---------------------------------------------------------------------------
+// Project staging: the CLI sandbox auto-rejects directories outside its run
+// dir, so a request that names a real project folder ("stage") gets that
+// folder COPIED into the fresh run dir before the CLI spawns — the agent then
+// works on it natively (read/edit/run like OpenCode does) — and every file it
+// created or modified is synced back to the original location afterwards.
+// node_modules/.git are skipped; only changed/new files sync back (mtime).
+// ---------------------------------------------------------------------------
+function stageProject(stage, runDir) {
+  if (typeof stage !== "string" || !path.isAbsolute(stage)) return null;
+  const src = path.resolve(stage);
+  try {
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return null;
+  } catch (_) { return null; }
+  const manifest = {};
+  const walk = (dir, rel) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      // .git MUST be copied: opencode resolves the project root by walking up
+      // to the nearest git repo — without the anchor it lands on whatever git
+      // repo is above the run dir and works in the wrong tree.
+      if (e.name === "node_modules") continue;
+      const abs = path.join(dir, e.name);
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) { walk(abs, r); continue; }
+      try {
+        manifest[r] = { abs, mtime: fs.statSync(abs).mtimeMs };
+        const dst = path.join(runDir, r);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(abs, dst);
+      } catch (_) {}
+    }
+  };
+  walk(src, "");
+  return manifest;
+}
+
+function syncBack(manifest, runDir) {
+  if (!manifest) return 0;
+  let synced = 0;
+  const walk = (dir, rel) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name.startsWith(".git")) continue;
+      const abs = path.join(dir, e.name);
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) { walk(abs, r); continue; }
+      const orig = manifest[r];
+      let mtime = 0;
+      try { mtime = fs.statSync(abs).mtimeMs; } catch (_) {}
+      if (!orig || Math.abs(mtime - orig.mtime) > 1) {
+        try {
+          fs.mkdirSync(path.dirname(orig.abs), { recursive: true });
+          fs.copyFileSync(abs, orig.abs);
+          synced++;
+        } catch (_) {}
+      }
+    }
+  };
+  walk(runDir, "");
+  return synced;
+}
+
+function runJob(prompt, model, files, onPartial, stage) {
+  // A staged project needs the spawn path: the project is copied into the
+  // fresh run dir (its own sandbox), so the persistent serve is bypassed.
+  if (stage) return spawnRunJob(prompt, model, files, onPartial, stage);
   // Fast path first; on any null result the spawn path below runs as before.
   return serveChat(prompt, model, files, onPartial).then((fast) => {
     if (fast) return fast;
@@ -251,7 +319,7 @@ function runJob(prompt, model, files, onPartial) {
   });
 }
 
-function spawnRunJob(prompt, model, files, onPartial) {
+function spawnRunJob(prompt, model, files, onPartial, stage) {
   return new Promise((resolve) => {
     runCounter = (runCounter + 1) % 100000;
     const runDir = runDirFor("r" + runCounter);
@@ -263,7 +331,13 @@ function spawnRunJob(prompt, model, files, onPartial) {
       resolve({ text: "", error: "mkdir failed: " + String(e).slice(0, 80) });
       return;
     }
-    log("run dir:", runDir, "model:", model, "attach:", Number(files) || 0);
+    let staged = null;
+    if (stage) {
+      staged = stageProject(stage, runDir);
+      log("run dir:", runDir, "model:", model, "attach:", Number(files) || 0, staged ? "STAGED " + Object.keys(staged).length + " files from " + stage : "stage rejected: " + stage);
+    } else {
+      log("run dir:", runDir, "model:", model, "attach:", Number(files) || 0);
+    }
     // argv comes from selectArgv: both inputs are validated tokens (the
     // model name from the whitelist chain, the attachment count a clamped
     // integer) and the function assigns only from the fully literal
@@ -300,7 +374,14 @@ const args = selectArgv(model).concat(attachArgs);
     // and the CLI resolves its auth file through the home path.
     // HOME pin: the CLI resolves its auth file through the home path. Use the
     // actual user profile — never a hardcoded machine-specific path.
-    const env = Object.assign({}, process.env, { HOME: process.env.OC_HOME || (process.platform === "win32" ? (process.env.USERPROFILE || os.homedir()) : process.env.HOME) });
+    // PWD must point at the run dir: the CLI resolves its project root from
+    // the inherited PWD env var, not process.cwd() — a stale PWD (from
+    // whoever launched the worker) made staged projects invisible.
+    const env = Object.assign({}, process.env, {
+      HOME: process.env.OC_HOME || (process.platform === "win32" ? (process.env.USERPROFILE || os.homedir()) : process.env.HOME),
+      PWD: runDir,
+      OLDPWD: runDir,
+    });
     const child = spawn(OC_EXE, args, { cwd: runDir, windowsHide: true, env: env });
     let buf = "";
     let text = "";
@@ -357,6 +438,10 @@ const args = selectArgv(model).concat(attachArgs);
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (errOut.trim()) log("stderr(code=" + code + "):", errOut.slice(0, 300).replace(/\n/g, " "));
+      if (staged) {
+        const n = syncBack(staged, runDir);
+        if (n) log("staged project synced back:", n, "changed file(s)");
+      }
       cleanupRunDir(runDir);
       // Same untranslated-SSE guard as the serve path: an anthropic
       // message_start/message_stop stream is an upstream failure, not text.
@@ -413,10 +498,11 @@ function processJob(job, base) {
   // Rotating-exit reality: a fresh ProxyRise IP can land on an edge that
   // answers a transient 401/429/5xx for the same key. Retry with a new
   // session (and thus a new exit) up to 6 times before giving up.
+  const stage = typeof job.stage === "string" ? job.stage : "";
   const attempt = (n) => {
     runJob(String(job.prompt || "hello"), model, Number(job.attach) || 0, (delta) => {
       if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
-    }).then((result) => {
+    }, stage).then((result) => {
       const err = result.error || "";
       const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network/i.test(err);
       // An EMPTY success is also transient: glm occasionally returns a
