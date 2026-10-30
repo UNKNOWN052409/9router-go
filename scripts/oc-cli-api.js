@@ -67,7 +67,7 @@ function normalizeModel(raw) {
 }
 const WAIT_MS = 180000;
 const POLL_MS = 150;
-const MAX_PROMPT_CHARS = 600000;
+const MAX_PROMPT_CHARS = 250000;
 
 const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
 function log(...parts) {
@@ -384,42 +384,42 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
     else if (role === "assistant") turns.push("[Assistant]\n" + text);
     else turns.push("[User]\n" + text);
   }
-  let out = turns.join("\n\n").trim();
-  if (!out) out = "hello";
-  if (jsonMode) {
-    out += "\n\n[SYSTEM] Respond with ONLY valid JSON — no markdown fences, no prose, no code block markers. Your entire output must parse as JSON.";
+  // Budget first: overflow drops the OLDEST turns, keeps the leading
+  // [System] turn and the most recent conversation (measured live: a
+  // 599,969-char IDE request sailed through the old head-keeping cap at
+  // 444k tokens and the CLI timed out on every attempt).
+  const protoEarly = buildToolsProtocol(
+    (!Array.isArray(tools) || !tools.length) && passiveEnabled() ? PASSIVE_TOOLS : tools,
+    toolChoice
+  );
+  const budget = Math.max(MAX_PROMPT_CHARS - protoEarly.length - 512, 40000);
+  let kept = [];
+  let keptCount = 0;
+  let used = 0;
+  const head = turns.length && turns[0].startsWith("[System]") ? turns[0] : null;
+  const pool = head ? turns.slice(1) : turns;
+  if (head && head.length + 8 <= budget) { kept.push(head); used = head.length + 8; }
+  for (let i = pool.length - 1; i >= 0; i--) {
+    const cost = pool[i].length + 8;
+    if (used + cost > budget) break;
+    kept.unshift(pool[i]);
+    used += cost;
+    keptCount++;
   }
-  // Reasoning effort: the CLI exposes no sampling knobs through this path, so
-  // the OpenAI request's effort is honored as a directive. Medium (the model
-  // default) adds nothing; only low/high change behavior.
+  let out = kept.join("\n\n").trim();
+  if (!out) out = "hello";
+  const dropped = turns.length - keptCount - (head ? 1 : 0);
+  if (dropped > 0) out = "[older messages truncated to fit the model context]\n\n" + out;
+  // Reasoning effort: the CLI exposes no sampling knobs through this path,
+  // so the OpenAI request's effort is honored as a directive. Medium (the
+  // model default) adds nothing; only low/high change behavior.
   const effort = String(reasoningEffort || "").toLowerCase();
   if (effort === "high") {
     out += "\n\n[SYSTEM] Reasoning effort: high. Think the problem through step by step before answering — weigh alternatives, check your work, then answer thoroughly.";
   } else if (effort === "low") {
     out += "\n\n[SYSTEM] Reasoning effort: low. Minimize deliberation — answer concisely and directly.";
   }
-  if (Array.isArray(imagePaths) && imagePaths.length) {
-    // The CLI is an agent with file-read tools: referencing the saved image
-    // files by absolute path makes it attach/read them (verified working).
-    const refs = imagePaths.map((p) => "- " + p).join(String.fromCharCode(10));
-    out += "\n\nAttached images (read and look at each of these files):\n\n" + refs;
-  }
-  // Budget order matters: the CONVERSATION is the payload that must never
-  // be truncated. The tool table can be enormous (OpenCode IDE sends 300+
-  // tool definitions), so it is appended AFTER the conversation and gets
-  // trimmed first when the total exceeds the cap — the reverse order
-  // amputated the user's context and made the model answer generically.
-  // Passive tools: when the client sent none, advertise the built-ins
-  // (web_search, current_datetime) so the model knows it can call them —
-  // the shim executes the call and re-runs the turn with the result.
-  let effectiveTools = tools;
-  let effectiveChoice = toolChoice;
-  if (!Array.isArray(tools) || !tools.length) {
-    if (passiveEnabled()) effectiveTools = PASSIVE_TOOLS;
-  }
-  const proto = buildToolsProtocol(effectiveTools, effectiveChoice);
-  const budget = Math.max(MAX_PROMPT_CHARS - proto.length - 64, 4000);
-  if (out.length > budget) out = out.slice(0, budget) + "\n...[earlier context truncated]";
+  const proto = protoEarly;
   if (proto) {
     out = proto + "\n\n" + out;
     // Repeat the mandate closest to the end — recency wins with agentic models.
