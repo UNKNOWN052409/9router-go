@@ -99,7 +99,22 @@ function selectArgv(model) {
 // The run directories stay config-free (an opencode.json in the cwd made
 // the CLI hang/401); the model goes on the command line via the literal
 // argv arrays above.
-const TIMEOUT_MS = 180000;
+const TIMEOUT_MS = parseInt(process.env.OC_TIMEOUT_MS || "180000", 10);
+// Long-output tasks (big translations, large code generation) need minutes of
+// generation: scale the timeout with the estimated OUTPUT size. Measured live:
+// glm-5.3-flash-free produces roughly 85-150 chars/sec through the CLI, so a
+// 26k-char input needing a ~30k-char answer requires ~350s — the flat 180s
+// killed every such request (the core Nano-to-Go short-output bug).
+function timeoutFor(promptChars) {
+  // assume output can be up to ~1.2x the input length for translate/expand tasks
+  const estimatedOutputChars = Math.max(promptChars * 1.2, 2000);
+  // measured live: a 27,339-char prompt needed >446s of silent generation
+  // before its single text event — the lead-in scales with context size.
+  const seconds = estimatedOutputChars / 50 + 180;
+  const scaled = Math.ceil(seconds * 1000);
+  const cap = parseInt(process.env.OC_TIMEOUT_MAX_MS || "900000", 10); // 15 min hard cap
+  return Math.min(Math.max(TIMEOUT_MS, scaled), cap);
+}
 
 const LOG_FILE = path.join(__dirname, "oc-worker.log");
 function log(...parts) {
@@ -136,14 +151,14 @@ function runDirFor(name) {
 // Measured 4.4s vs 8.5s spawn latency; same fresh-bucket semantics (a new
 // session gets a new quota bucket). Every failure falls back to the spawn path.
 // ---------------------------------------------------------------------------
-const OC_SERVE_PORT = 20193;
+const OC_SERVE_PORT = parseInt(process.env.OC_SERVE_PORT || "20193", 10);
 const OC_SERVE = "http://127.0.0.1:" + OC_SERVE_PORT;
 // Serve calls must time out: a wedged upstream otherwise hangs the job until
 // the shim's 180s wait gives up, and the wedged serve process then poisons
 // every later request — the "first token after 3 minutes" symptom. On a
 // timeout the serve is killed and rebooted, and the job falls back to the
 // spawn path (which has its own timeout and retry handling).
-const SERVE_TIMEOUT_MS = 120000;
+const SERVE_TIMEOUT_MS = parseInt(process.env.OC_SERVE_TIMEOUT_MS || "300000", 10);
 let serveProc = null;
 let serveBooting = null;
 
@@ -243,7 +258,79 @@ async function serveChat(prompt, model, files, onPartial) {
   return result;
 }
 
-function runJob(prompt, model, files, onPartial) {
+// ---------------------------------------------------------------------------
+// Project staging: the CLI sandbox auto-rejects directories outside its run
+// dir, so a request that names a real project folder ("stage") gets that
+// folder COPIED into the fresh run dir before the CLI spawns — the agent then
+// works on it natively (read/edit/run like OpenCode does) — and every file it
+// created or modified is synced back to the original location afterwards.
+// node_modules/.git are skipped; only changed/new files sync back (mtime).
+// ---------------------------------------------------------------------------
+function stageProject(stage, runDir) {
+  if (typeof stage !== "string" || !path.isAbsolute(stage)) return null;
+  const src = path.resolve(stage);
+  try {
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return null;
+  } catch (_) { return null; }
+  const manifest = {};
+  const walk = (dir, rel) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      // .git MUST be copied: opencode resolves the project root by walking up
+      // to the nearest git repo — without the anchor it lands on whatever git
+      // repo is above the run dir and works in the wrong tree.
+      if (e.name === "node_modules") continue;
+      const abs = path.join(dir, e.name);
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) { walk(abs, r); continue; }
+      try {
+        manifest[r] = { abs, mtime: fs.statSync(abs).mtimeMs };
+        const dst = path.join(runDir, r);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(abs, dst);
+      } catch (_) {}
+    }
+  };
+  walk(src, "");
+  return manifest;
+}
+
+function syncBack(manifest, runDir) {
+  if (!manifest) return 0;
+  let synced = 0;
+  const walk = (dir, rel) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name.startsWith(".git")) continue;
+      const abs = path.join(dir, e.name);
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) { walk(abs, r); continue; }
+      const orig = manifest[r];
+      let mtime = 0;
+      try { mtime = fs.statSync(abs).mtimeMs; } catch (_) {}
+      if (!orig || Math.abs(mtime - orig.mtime) > 1) {
+        try {
+          fs.mkdirSync(path.dirname(orig.abs), { recursive: true });
+          fs.copyFileSync(abs, orig.abs);
+          synced++;
+        } catch (_) {}
+      }
+    }
+  };
+  walk(runDir, "");
+  return synced;
+}
+
+function runJob(prompt, model, files, onPartial, stage) {
+  // A staged project needs the spawn path: the project is copied into the
+  // fresh run dir (its own sandbox), so the persistent serve is bypassed.
+  // Large prompts also skip the serve: its 300s ceiling is below the
+  // generation time a big-context request needs.
+  if (stage || String(prompt || "").length > 8000) {
+    return spawnRunJob(prompt, model, files, onPartial, stage);
+  }
   // Fast path first; on any null result the spawn path below runs as before.
   return serveChat(prompt, model, files, onPartial).then((fast) => {
     if (fast) return fast;
@@ -251,7 +338,7 @@ function runJob(prompt, model, files, onPartial) {
   });
 }
 
-function spawnRunJob(prompt, model, files, onPartial) {
+function spawnRunJob(prompt, model, files, onPartial, stage) {
   return new Promise((resolve) => {
     runCounter = (runCounter + 1) % 100000;
     const runDir = runDirFor("r" + runCounter);
@@ -263,7 +350,13 @@ function spawnRunJob(prompt, model, files, onPartial) {
       resolve({ text: "", error: "mkdir failed: " + String(e).slice(0, 80) });
       return;
     }
-    log("run dir:", runDir, "model:", model, "attach:", Number(files) || 0);
+    let staged = null;
+    if (stage) {
+      staged = stageProject(stage, runDir);
+      log("run dir:", runDir, "model:", model, "attach:", Number(files) || 0, staged ? "STAGED " + Object.keys(staged).length + " files from " + stage : "stage rejected: " + stage);
+    } else {
+      log("run dir:", runDir, "model:", model, "attach:", Number(files) || 0);
+    }
     // argv comes from selectArgv: both inputs are validated tokens (the
     // model name from the whitelist chain, the attachment count a clamped
     // integer) and the function assigns only from the fully literal
@@ -300,7 +393,14 @@ const args = selectArgv(model).concat(attachArgs);
     // and the CLI resolves its auth file through the home path.
     // HOME pin: the CLI resolves its auth file through the home path. Use the
     // actual user profile — never a hardcoded machine-specific path.
-    const env = Object.assign({}, process.env, { HOME: process.env.OC_HOME || (process.platform === "win32" ? (process.env.USERPROFILE || os.homedir()) : process.env.HOME) });
+    // PWD must point at the run dir: the CLI resolves its project root from
+    // the inherited PWD env var, not process.cwd() — a stale PWD (from
+    // whoever launched the worker) made staged projects invisible.
+    const env = Object.assign({}, process.env, {
+      HOME: process.env.OC_HOME || (process.platform === "win32" ? (process.env.USERPROFILE || os.homedir()) : process.env.HOME),
+      PWD: runDir,
+      OLDPWD: runDir,
+    });
     const child = spawn(OC_EXE, args, { cwd: runDir, windowsHide: true, env: env });
     let buf = "";
     let text = "";
@@ -308,6 +408,8 @@ const args = selectArgv(model).concat(attachArgs);
     let tokens = null;
     let errOut = "";
     let errored = null;
+    const timeoutMs = timeoutFor(String(prompt || "").length);
+    log("spawn timeout budget:", Math.round(timeoutMs / 1000) + "s for " + String(prompt || "").length + " chars");
     const timer = setTimeout(() => {
       errored = "timeout";
       // Tree-kill: the CLI spawns its own children; a bare kill() leaves
@@ -317,7 +419,7 @@ const args = selectArgv(model).concat(attachArgs);
       } else {
         try { child.kill(); } catch (_) {}
       }
-    }, TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
       buf += chunk.toString("utf8");
@@ -357,6 +459,10 @@ const args = selectArgv(model).concat(attachArgs);
     child.on("exit", (code) => {
       clearTimeout(timer);
       if (errOut.trim()) log("stderr(code=" + code + "):", errOut.slice(0, 300).replace(/\n/g, " "));
+      if (staged) {
+        const n = syncBack(staged, runDir);
+        if (n) log("staged project synced back:", n, "changed file(s)");
+      }
       cleanupRunDir(runDir);
       // Same untranslated-SSE guard as the serve path: an anthropic
       // message_start/message_stop stream is an upstream failure, not text.
@@ -413,22 +519,84 @@ function processJob(job, base) {
   // Rotating-exit reality: a fresh ProxyRise IP can land on an edge that
   // answers a transient 401/429/5xx for the same key. Retry with a new
   // session (and thus a new exit) up to 6 times before giving up.
+  const stage = typeof job.stage === "string" ? job.stage : "";
+  let bestShort = "";   // best short answer seen across retry attempts
+  // CONTINUATION STITCHING: long-output tasks (big translations, large code
+  // generation) outrun any fixed CLI timeout — the run ends with a PARTIAL
+  // answer plus a timeout error. Instead of shipping the partial (the client
+  // sees a truncated translation — the reported Nano-to-Go bug), the worker
+  // automatically sends "continue exactly where you stopped" passes with a
+  // fresh session each time and stitches the output until the task completes
+  // or growth stalls. This mirrors what the upstream Nano-to-Go gets for free
+  // (server-side generation has no local timeout).
+  let accumulated = "";          // stitched text across continuation passes
+  let carryPrompt = String(job.prompt || "hello");
   const attempt = (n) => {
-    runJob(String(job.prompt || "hello"), model, Number(job.attach) || 0, (delta) => {
+    runJob(carryPrompt, model, Number(job.attach) || 0, (delta) => {
       if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
-    }).then((result) => {
+    }, stage).then((result) => {
       const err = result.error || "";
-      const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network/i.test(err);
-      if (err && transient && n < 6) {
+      const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network|certificate|TLS|SSL|reset by (server|peer)/i.test(err);
+      const timedOutWithPartial = /timeout/i.test(err) && result.text && result.text.length > 300;
+      const maxAccumulated = parseInt(process.env.OC_MAX_ACCUMULATED || "2000000", 10);
+      const maxContinuations = parseInt(process.env.OC_MAX_CONTINUATIONS || "40", 10);
+      if (timedOutWithPartial && accumulated.length + result.text.length < maxAccumulated && n < maxContinuations) {
+        // Keep the partial, then continue from where it stopped with a fresh
+        // session (fresh quota bucket) carrying the tail as context.
+        const piece = result.text;
+        accumulated += (accumulated ? "\n" : "") + piece;
+        log(base, "attempt " + n + " partial on timeout (" + piece.length + " chars, " + accumulated.length + " accumulated) — continuing");
+        if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        carryPrompt = String(job.prompt || "hello") +
+          "\n\n[SYSTEM] You already produced the following PARTIAL output for this exact task:\n\n" +
+          piece.slice(-8000) +
+          "\n\n[SYSTEM] CONTINUE EXACTLY from where that output stops. Do NOT repeat any earlier content. Do not add commentary or headings — just continue the task seamlessly to its end. If and only if the task is fully complete, reply with the single word CONTINUE-COMPLETE.";
+        setTimeout(() => attempt(n + 1), 1500);
+        return;
+      }
+      // A ONE-LINE answer on a HUGE prompt is degraded generation, not a real
+      // answer: near the context limit glm sometimes emits a single short
+      // line and stops (measured live: 78 chars out of a 248k-char request).
+      // Retry with a fresh session and deliver whichever attempt answered
+      // more. Small prompts are exempt — a short answer there is legitimate.
+      if (!err && result.text && result.text.length < 150 &&
+          String(carryPrompt || "").length > 100000 && n < 2) {
+        if (result.text.length > bestShort.length) bestShort = result.text;
+        log(base, "attempt " + n + " one-line answer on huge prompt (" + result.text.length + " chars) — retrying for a fuller answer");
+        if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        setTimeout(() => attempt(n + 1), 1500);
+        return;
+      }
+      // An EMPTY success is also transient: glm occasionally returns a
+      // zero-char completion with no error (measured live), which a chat
+      // client renders as nothing at all. Retry — a fresh session usually
+      // answers normally.
+      if (!err && !result.text && !accumulated && n < 3) {
+        log(base, "attempt " + n + " empty completion — retrying");
+        if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        setTimeout(() => attempt(n + 1), 1500);
+        return;
+      }
+
+      if (err && transient && !accumulated && n < 6) {
         log(base, "attempt " + n + " transient (" + err.slice(0, 500) + ") — retrying");
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
         setTimeout(() => attempt(n + 1), 2000);
         return;
       }
+      let finalText = result.text || "";
+      if (accumulated) finalText = accumulated + (finalText ? "\n" + finalText : "");
+      // If every attempt came back one-line-degraded, deliver the best line
+      // we got rather than an empty shell.
+      if (finalText.length < bestShort.length) finalText = bestShort;
+      let finalError = err;
+      // A timeout that still leaves a stitched answer is delivered as success:
+      // the client gets the complete stitched output rather than a 502.
+      if (err && /timeout/i.test(err) && finalText) finalError = null;
       try {
-        fs.writeFileSync(outPath, JSON.stringify(result));
+        fs.writeFileSync(outPath, JSON.stringify({ text: finalText, error: finalError, tokens: result.tokens, reasoning: result.reasoning }));
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
-        log(base, "done, chars=" + result.text.length, result.error ? "error=" + result.error.slice(0, 80) : "");
+        log(base, "done, chars=" + finalText.length + (accumulated ? " (stitched " + accumulated.length + ")" : ""), finalError ? "error=" + String(finalError).slice(0, 80) : "");
       } catch (e) { log(base, "write result failed:", String(e).slice(0, 80)); }
       inflight.delete(base);
     });
@@ -512,8 +680,9 @@ function main() {
       res.end('{"ok":true}');
     });
   });
-  runServer.listen(20194, "127.0.0.1", () => {
-    log("direct-run endpoint listening on http://127.0.0.1:20194/run");
+  const runPort = parseInt(process.env.OC_RUN_PORT || "20194", 10);
+  runServer.listen(runPort, "127.0.0.1", () => {
+    log("direct-run endpoint listening on http://127.0.0.1:" + runPort + "/run");
   });
 }
 // Exports for unit tests (CI): pure functions only — no polling started.
