@@ -67,7 +67,7 @@ function normalizeModel(raw) {
 }
 const WAIT_MS = parseInt(process.env.OC_WAIT_MS || "900000", 10); // must cover the worker's scaled timeout
 const POLL_MS = 150;
-const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "250000", 10); // raise for larger-context models
+const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "150000", 10); // auto-compact target: keeps glm in its comfortable zone // raise for larger-context models
 
 const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
 function log(...parts) {
