@@ -535,7 +535,7 @@ function processJob(job, base) {
       if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
     }, stage).then((result) => {
       const err = result.error || "";
-      const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network/i.test(err);
+      const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network|certificate|TLS|SSL|reset by (server|peer)/i.test(err);
       const timedOutWithPartial = /timeout/i.test(err) && result.text && result.text.length > 300;
       const maxAccumulated = parseInt(process.env.OC_MAX_ACCUMULATED || "2000000", 10);
       const maxContinuations = parseInt(process.env.OC_MAX_CONTINUATIONS || "40", 10);
