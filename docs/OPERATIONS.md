@@ -59,6 +59,6 @@ Covers: health, text round-trip, tool calling, vision, streaming, and a
 
 ## Changing models
 
-Edit the literal `MODEL_RUN_ARGS` table in `scripts/oc-cli-worker.js`
+Edit the literal `MODEL_RUN_ARGS` table in `reset-lane/worker/oc-cli-worker.js`
 (key = public model name, value = constant argv). Nothing else needs to
 change; the shim passes the model name through verbatim.

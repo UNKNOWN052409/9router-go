@@ -15,8 +15,8 @@ import assert from "node:assert";
 const require = createRequire(import.meta.url);
 // The live scripts guard their startup behind `require.main === module`, so
 // requiring them here starts no servers and no job sweeps.
-const shim = require("../scripts/oc-cli-api.js");
-const worker = require("../scripts/oc-cli-worker.js");
+const shim = require("../reset-lane/shim/oc-cli-api.js");
+const worker = require("../reset-lane/worker/oc-cli-worker.js");
 
 let failed = 0;
 function test(name, fn) {

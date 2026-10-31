@@ -18,7 +18,7 @@ jobs:
 
       - name: Syntax-check all scripts
         run: |
-          for f in scripts/*.js; do
+          for f in reset-lane/shim/*.js reset-lane/worker/*.js reset-lane/tools/*.js; do
             node --check "$f"
             echo "OK  $f"
           done

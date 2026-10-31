@@ -17,21 +17,21 @@ rem  N9R_GATEWAY_START env var to that script's full path; N9R_HOME\rotation\
 rem  start-9router-go-rotation.cmd is tried as a fallback).
 rem ============================================================
 setlocal
-set "DIR=%~dp0scripts"
+set "DIR=%~dp0reset-lane"
 
 rem --- 1. shim (API front-end) ---
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-api' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\oc-cli-api.js'; Write-Output 'shim started' } else { Write-Output 'shim already running' } }"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-api' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\shim\oc-cli-api.js'; Write-Output 'shim started' } else { Write-Output 'shim already running' } }"
 
 rem --- 2. worker (fresh-session runner; serve boots inside it) ---
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-worker' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\oc-cli-worker.js'; Write-Output 'worker started' } else { Write-Output 'worker already running' } }"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-worker' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\worker\oc-cli-worker.js'; Write-Output 'worker started' } else { Write-Output 'worker already running' } }"
 
 rem --- 3. router wiring (idempotent; skips when no 9router database exists) ---
-if exist "%DIR%\seed-router-combos.js" node "%DIR%\seed-router-combos.js"
+if exist "%DIR%	ools\seed-router-combos.js" node "%DIR%	ools\seed-router-combos.js"
 
 rem --- 4. optional: node-9router registry patch + gateway start ---
 if /i "%1"=="--with-router" (
-    if exist "%DIR%\patch-node9router-oc.js" (
-        node "%DIR%\patch-node9router-oc.js"
+    if exist "%DIR%	ools\patch-node9router-oc.js" (
+        node "%DIR%	ools\patch-node9router-oc.js"
         echo [start] node-9router oc/ lane patched if needed.
     )
     if defined N9R_GATEWAY_START (

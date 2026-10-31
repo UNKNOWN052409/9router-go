@@ -265,7 +265,7 @@ is a one-line env change.
 
 ### Stability & one-command boot
 
-`oc-chain-watchdog.ps1` (scheduled task every 2 min, launched hidden via
+`reset-lane/watchdog/oc-chain-watchdog.ps1` (scheduled task every 2 min, launched hidden via
 `oc-chain-watchdog-hidden.vbs` — no console flicker) keeps exactly one shim +
 one worker alive and kills duplicates (duplicate workers share the run-dir
 counter and delete each other's directories — a real incident).
@@ -346,14 +346,14 @@ Verified against the live chain (shim + worker + CLI):
 ## Layout
 
 ```
-scripts/oc-cli-api.js      HTTP shim (port 20142, 127.0.0.1 only)
-scripts/oc-cli-worker.js   file-queue job runner (fresh dir/session per job)
+reset-lane/shim/oc-cli-api.js       HTTP shim (port 20142, 127.0.0.1 only)
+reset-lane/worker/oc-cli-worker.js  file-queue job runner (fresh dir/session per job)
 tests/smoke.mjs            end-to-end test battery (needs the live chain)
 tests/unit.test.mjs        pure-function unit tests (CI-safe, no network)
 install/start/stop.cmd     Windows lifecycle (hidden windows)
 install/start/stop.sh      Linux/macOS lifecycle (Render, VPS — auto-installs opencode)
-scripts/patch-node9router-oc.js  wires the built-in oc/ lane to the shim (idempotent)
-scripts/seed-router-combos.js    seeds bare-name combos into the router sqlite (idempotent)
+reset-lane/tools/patch-node9router-oc.js  wires the built-in oc/ lane to the shim (idempotent)
+reset-lane/tools/seed-router-combos.js    seeds bare-name combos into the router sqlite (idempotent)
 .github/workflows/ci.yml   GitHub Actions: syntax checks + unit tests
 docs/ARCHITECTURE.md       component detail + data flow + safety model
 docs/OPERATIONS.md         run, restart, logs, troubleshooting

@@ -2,7 +2,7 @@
 
 ## Components
 
-### 1. `scripts/oc-cli-api.js` — OpenAI-compatible shim (HTTP front-end)
+### 1. `reset-lane/shim/oc-cli-api.js` — OpenAI-compatible shim (HTTP front-end)
 
 - Binds `127.0.0.1:20142`. No child processes.
 - Translates one `POST /v1/chat/completions` into one job file
@@ -27,7 +27,7 @@
 - Response parsing strips markdown fences from `response_format:json_object`
   answers.
 
-### 2. `scripts/oc-cli-worker.js` — file-queue job runner
+### 2. `reset-lane/worker/oc-cli-worker.js` — file-queue job runner
 
 - Polls the jobs dir every 700 ms; reads a job file then immediately unlinks
   it (so the sweep cannot double-run a job mid-CLI-run).
