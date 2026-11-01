@@ -17,6 +17,12 @@ services = [
         "env": os.environ.copy()
     },
     {
+        "name": "proxy_harvester",
+        "cmd": [sys.executable, r"C:\Users\binga\9router-go\tools\auto_proxy_harvester.py"],
+        "cwd": r"C:\Users\binga\9router-go",
+        "env": os.environ.copy()
+    },
+    {
         "name": "9router",
         "cmd": [node_exe, "--dns-result-order=ipv4first", "--max-old-space-size=6144", os.path.join(app_data, r"npm\node_modules\9router\app\custom-server.js")],
         "cwd": os.path.join(app_data, r"npm\node_modules\9router\app"),
