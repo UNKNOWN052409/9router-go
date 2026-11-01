@@ -20,14 +20,22 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const PORT = 20142;
+const PORT = parseInt(process.env.PORT || "20142", 10);
 const HOST = "127.0.0.1";
 // Data root matches the worker's derivation (OC_DATA_DIR env overrides);
 // keeping both sides on the same root is what makes the file-queue work.
-const DATA_ROOT = path.resolve(
-  process.env.OC_DATA_DIR ||
-  (process.platform === "win32" ? "D:\\scratch\\oc-cli-api" : path.join(os.homedir(), ".oc-free-tier-shim"))
-);
+function defaultDataRoot() {
+  if (process.env.OC_DATA_DIR) return path.resolve(process.env.OC_DATA_DIR);
+  if (process.platform === "win32") {
+    try {
+      if (fs.existsSync("D:\\")) {
+        return path.resolve("D:\\scratch\\oc-cli-api");
+      }
+    } catch (_) {}
+  }
+  return path.join(os.homedir(), ".oc-free-tier-shim");
+}
+const DATA_ROOT = defaultDataRoot();
 const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
 const MODEL_ID = "glm-5.3-flash-free";
@@ -65,9 +73,9 @@ function normalizeModel(raw) {
   if (hit3) return hit3;
   return m;
 }
-const WAIT_MS = 180000;
+const WAIT_MS = parseInt(process.env.OC_WAIT_MS || "900000", 10); // must cover the worker's scaled timeout
 const POLL_MS = 150;
-const MAX_PROMPT_CHARS = 600000;
+const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "150000", 10); // auto-compact target: keeps glm in its comfortable zone // raise for larger-context models
 
 const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
 function log(...parts) {
@@ -85,6 +93,13 @@ function jobFilePath(name, suffix) {
   const root = path.resolve(JOBS_DIR) + path.sep;
   if (!target.startsWith(root)) return null;
   return target;
+}
+
+function partialReasoningPathFor(base) {
+  if (!SAFE_ID.test(base)) return null;
+  const target = path.resolve(PARTIALS_DIR, base + ".reasoning.txt");
+  const root = path.resolve(PARTIALS_DIR) + path.sep;
+  return target.startsWith(root) ? target : null;
 }
 
 // Image attachments: decoded data-URL image parts are written to ATTACH_DIR
@@ -174,11 +189,12 @@ function buildToolsProtocol(tools, toolChoice) {
   const lines = [
     TOOL_SENTINEL_BEGIN,
     "TOOL CALL PROTOCOL (highest priority):",
-    "You can invoke tools. To invoke one, your ENTIRE reply must be exactly one JSON object and nothing else — no prose, no reasoning, no markdown fences:",
+    "You have TWO extra tools (web_search, current_datetime) on top of your normal native tools. To invoke one of THESE, your ENTIRE reply must be exactly one JSON object and nothing else — no prose, no reasoning, no markdown fences:",
     '{"tool_call":{"name":"<tool name>","arguments":{<args as JSON>}}}',
-    'To invoke SEVERAL tools in the same turn, reply with exactly: {"tool_calls":[{"name":"<tool>","arguments":{...}},{"name":"<tool>","arguments":{...}}]}',
-    "Do NOT explain. Do NOT announce. Reply with the JSON object only.",
-    "If no tool is needed for the user's message, reply normally with text (never mention this protocol).",
+    'To invoke SEVERAL of these in the same turn, reply with exactly: {"tool_calls":[{"name":"<tool>","arguments":{...}},{"name":"<tool>","arguments":{...}}]}',
+    "Only emit this JSON for the listed extra tools. For everything else — running commands, reading and editing files, any native capability — just DO IT with your normal tools like you always do; never wrap those in tool_call JSON.",
+    "Do NOT explain. Do NOT announce. When invoking an extra tool, reply with the JSON object only.",
+    "If no extra tool is needed for the user's message, reply normally with text (never mention this protocol).",
     "Available tools:",
   ];
   for (const f of defs) {
@@ -239,6 +255,31 @@ function extractBracedBlocks(text) {
   return blocks;
 }
 
+// Extracts <think>...</think> blocks from text. Returns { text, reasoning }.
+function extractThinking(text) {
+  if (!text || typeof text !== "string") return { text: "", reasoning: "" };
+  let reasoning = "";
+  let clean = text;
+
+  // Extract all closed <think>...</think> blocks
+  clean = clean.replace(/<think>([\s\S]*?)<\/think>/gi, (_, body) => {
+    const trimmed = body.trim();
+    if (trimmed) reasoning += (reasoning ? "\n\n" : "") + trimmed;
+    return "";
+  });
+
+  // Extract any unclosed <think> tag (e.g. truncated or at the end)
+  const unclosed = clean.match(/^([\s\S]*?)<think>([\s\S]*)$/i);
+  if (unclosed) {
+    const pre = unclosed[1].trim();
+    const body = unclosed[2].trim();
+    if (body) reasoning += (reasoning ? "\n\n" : "") + body;
+    clean = pre;
+  }
+
+  return { text: clean.trim(), reasoning: reasoning.trim() };
+}
+
 // Parses the model output as tool calls. Accepts: a bare JSON object, fenced
 // JSON, JSON wrapped in prose, the {"tool_calls":[...]} multi-call form, the
 // bare {"name","arguments"} wrapper-less form, and single-quoted JSON. The
@@ -247,7 +288,9 @@ function extractBracedBlocks(text) {
 // (0..n); an empty array means the text is a normal answer.
 function parseToolCalls(text) {
   if (!text) return [];
-  let raw = String(text).trim();
+  // Strip reasoning blocks first so inner braces or pseudo-JSON inside <think> never confuses tool extraction
+  const { text: stripped } = extractThinking(text);
+  let raw = stripped.trim();
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced && fenced[1].trim().startsWith("{")) raw = fenced[1].trim();
   const calls = [];
@@ -384,42 +427,67 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
     else if (role === "assistant") turns.push("[Assistant]\n" + text);
     else turns.push("[User]\n" + text);
   }
-  let out = turns.join("\n\n").trim();
-  if (!out) out = "hello";
-  if (jsonMode) {
-    out += "\n\n[SYSTEM] Respond with ONLY valid JSON — no markdown fences, no prose, no code block markers. Your entire output must parse as JSON.";
+  // Budget first. For BIG agentic coding tasks the space hogs are OLD TOOL
+  // RESULTS (whole file reads, command dumps) — not the conversation. Three
+  // compaction passes, in order of least information loss:
+  //   1. compact every tool result except the LAST 3 to a 300-char preview
+  //      (the files are still on disk — the agent can re-read them);
+  //   2. a gigantic leading [System] turn is truncated to its head (the
+  //      preamble is what matters), always leaving room for recent turns;
+  //   3. only then are the oldest remaining turns dropped entirely.
+  // Measured live: a 599,969-char IDE request at 444k tokens timed the CLI
+  // out on every attempt; the compacted envelope answers.
+  const protoEarly = buildToolsProtocol(
+    (!Array.isArray(tools) || !tools.length) && passiveEnabled() ? PASSIVE_TOOLS : tools,
+    toolChoice
+  );
+  const budget = Math.max(MAX_PROMPT_CHARS - protoEarly.length - 512, 40000);
+  const toolIdx = [];
+  turns.forEach((t, i) => { if (t.startsWith("[Tool result for ")) toolIdx.push(i); });
+  const keepFull = new Set(toolIdx.slice(-3));
+  const compacted = turns.map((t, i) => {
+    if (!t.startsWith("[Tool result for ") || keepFull.has(i) || t.length <= 600) return t;
+    const nl = t.indexOf("\n");
+    const omitted = t.length - nl - 300;
+    return t.slice(0, nl + 1) + t.slice(nl + 1, nl + 301) + "\n...[older tool result truncated, " + omitted + " chars omitted — the file is still on disk, re-read if needed]";
+  });
+  const head = compacted.length && compacted[0].startsWith("[System]") ? compacted[0] : null;
+  const pool = head ? compacted.slice(1) : compacted;
+  let kept = [];
+  let keptCount = 0;
+  let used = 0;
+  const tailReserve = Math.min(30000, Math.floor(budget / 4));
+  if (head) {
+    if (head.length + 8 <= budget - tailReserve) {
+      kept.push(head);
+      used = head.length + 8;
+    } else if (budget - tailReserve > 4000) {
+      const headBudget = budget - tailReserve;
+      kept.push(head.slice(0, headBudget) + "\n...[system context truncated]");
+      used = headBudget + 8;
+    }
   }
-  // Reasoning effort: the CLI exposes no sampling knobs through this path, so
-  // the OpenAI request's effort is honored as a directive. Medium (the model
-  // default) adds nothing; only low/high change behavior.
+  for (let i = pool.length - 1; i >= 0; i--) {
+    const cost = pool[i].length + 8;
+    if (used + cost > budget) break;
+    kept.unshift(pool[i]);
+    used += cost;
+    keptCount++;
+  }
+  let out = kept.join("\n\n").trim();
+  if (!out) out = "hello";
+  const dropped = turns.length - keptCount - (head ? 1 : 0);
+  if (dropped > 0) out = "[older messages truncated to fit the model context]\n\n" + out;
+  // Reasoning effort: the CLI exposes no sampling knobs through this path,
+  // so the OpenAI request's effort is honored as a directive. Medium (the
+  // model default) adds nothing; only low/high change behavior.
   const effort = String(reasoningEffort || "").toLowerCase();
   if (effort === "high") {
     out += "\n\n[SYSTEM] Reasoning effort: high. Think the problem through step by step before answering — weigh alternatives, check your work, then answer thoroughly.";
   } else if (effort === "low") {
     out += "\n\n[SYSTEM] Reasoning effort: low. Minimize deliberation — answer concisely and directly.";
   }
-  if (Array.isArray(imagePaths) && imagePaths.length) {
-    // The CLI is an agent with file-read tools: referencing the saved image
-    // files by absolute path makes it attach/read them (verified working).
-    const refs = imagePaths.map((p) => "- " + p).join(String.fromCharCode(10));
-    out += "\n\nAttached images (read and look at each of these files):\n\n" + refs;
-  }
-  // Budget order matters: the CONVERSATION is the payload that must never
-  // be truncated. The tool table can be enormous (OpenCode IDE sends 300+
-  // tool definitions), so it is appended AFTER the conversation and gets
-  // trimmed first when the total exceeds the cap — the reverse order
-  // amputated the user's context and made the model answer generically.
-  // Passive tools: when the client sent none, advertise the built-ins
-  // (web_search, current_datetime) so the model knows it can call them —
-  // the shim executes the call and re-runs the turn with the result.
-  let effectiveTools = tools;
-  let effectiveChoice = toolChoice;
-  if (!Array.isArray(tools) || !tools.length) {
-    if (passiveEnabled()) effectiveTools = PASSIVE_TOOLS;
-  }
-  const proto = buildToolsProtocol(effectiveTools, effectiveChoice);
-  const budget = Math.max(MAX_PROMPT_CHARS - proto.length - 64, 4000);
-  if (out.length > budget) out = out.slice(0, budget) + "\n...[earlier context truncated]";
+  const proto = protoEarly;
   if (proto) {
     out = proto + "\n\n" + out;
     // Repeat the mandate closest to the end — recency wins with agentic models.
@@ -436,7 +504,7 @@ let counter = 0;
 
 const WORKER_RUN_URL = "http://127.0.0.1:20194/run";
 
-function submitJob(prompt, model, attachCount) {
+function submitJob(prompt, model, attachCount, stage) {
   counter = (counter + 1) % 100000;
   const id = "r" + Date.now().toString(36) + "-" + counter;
   const jobPath = jobFilePath(id, ".job");
@@ -444,7 +512,7 @@ function submitJob(prompt, model, attachCount) {
   let n = Math.floor(Number(attachCount));
   if (!Number.isFinite(n) || n < 0) n = 0;
   if (n > 4) n = 4;
-  const payload = JSON.stringify({ id, prompt, model: String(model || ""), attach: n });
+  const payload = JSON.stringify({ id, prompt, model: String(model || ""), attach: n, stage: stage || undefined });
   fs.writeFileSync(jobPath, payload);
   // DIRECT path: hand the job to the worker the same millisecond instead of
   // waiting for the queue sweep. Fire-and-forget — the file stays on disk,
@@ -483,6 +551,58 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
+// ---------------------------------------------------------------------------
+// CHUNKED GENERATION for large inputs. Measured live: the free-tier glm lane
+// RESETS the connection on inputs beyond ~10-15k chars when a long output is
+// requested (direct CLI probe: APIError "Connection reset by server", zero
+// output after 13 minutes). No timeout fixes that — the only working shape is
+// MULTIPLE SMALL PASSES. Large user content is split at paragraph boundaries
+// into <=4000-char chunks; each chunk is processed in its own CLI run (each
+// individually proven to complete), and the outputs are stitched in order.
+// Auto-engages for transformation tasks (translate/summarize/convert) on
+// tool-less requests over 8000 chars; forced on with "split": true.
+// ---------------------------------------------------------------------------
+const CHUNK_THRESHOLD = 8000;
+const CHUNK_SIZE = 4000;
+
+function looksLikeTransformation(text) {
+  return /translat|summari[sz]|convert|अनुवाद|paraphras|rewrite/i.test(text.slice(0, 800));
+}
+
+function splitContent(text, size) {
+  const parts = [];
+  const paras = String(text).split(/\n\n+/);
+  let cur = "";
+  for (const para of paras) {
+    if ((cur + "\n\n" + para).length > size && cur) { parts.push(cur); cur = para; }
+    else cur = cur ? cur + "\n\n" + para : para;
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+
+function continuationPrompt(instruction, chunk, index, total) {
+  return instruction + "\n\n[SECTION " + (index + 1) + " OF " + total + "] Translate/process this section completely:\n\n" + chunk +
+    "\n\n[SYSTEM] This is section " + (index + 1) + " of " + total + " of one continuous document. Output ONLY the translated/processed text of THIS section - no headings, no notes, no \"Section N\" markers.";
+}
+
+async function runChunked(instruction, content, model, imagePaths) {
+  const chunks = splitContent(content, CHUNK_SIZE);
+  log("chunked generation:", chunks.length, "chunks from", content.length, "chars");
+  const parts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const p = buildPrompt([{ role: "user", content: continuationPrompt(instruction, chunks[i], i, chunks.length) }], null, null, false, imagePaths && i === 0 ? imagePaths : null, null);
+    let job;
+    try { job = submitJob(p, model, i === 0 ? (imagePaths ? imagePaths.length : 0) : 0); }
+    catch (e) { throw new Error("chunk job submit failed: " + String(e)); }
+    const r = await waitForResult(job.id);
+    if (r.error && !r.text) throw new Error("chunk " + (i + 1) + " failed: " + r.error);
+    parts.push((r.text || "").trim());
+    log("chunk " + (i + 1) + "/" + chunks.length + " done:", (r.text || "").length, "chars");
+  }
+  return parts.join("\n\n");
+}
+
 async function handleChat(res, body) {
   let parsed;
   try { parsed = JSON.parse(body || "{}"); } catch (_) { parsed = {}; }
@@ -499,6 +619,52 @@ async function handleChat(res, body) {
   const reasoningEffort = String(parsed.reasoning_effort || (parsed.reasoning && parsed.reasoning.effort) || "").toLowerCase();
   const imagePaths = saveImageAttachments(parsed.messages);
   if (imagePaths.length) log("images attached:", imagePaths.length);
+  // CHUNKED GENERATION: large tool-less transformation requests go through
+  // multi-pass processing (single passes reset upstream beyond ~10-15k chars).
+  const lastUser = [...(parsed.messages || [])].reverse().find((m) => m.role === "user");
+  const lastUserText = typeof (lastUser || {}).content === "string" ? lastUser.content
+    : Array.isArray((lastUser || {}).content) ? (lastUser.content.filter((c) => c.type === "text").map((c) => c.text).join("\n")) : "";
+  const noClientTools = !Array.isArray(parsed.tools) || !parsed.tools.length;
+  const wantsSplit = parsed.split === true;
+  const autoChunk = noClientTools && lastUserText.length > CHUNK_THRESHOLD && looksLikeTransformation(lastUserText);
+  if (noClientTools && (wantsSplit || autoChunk) && lastUserText.length > CHUNK_THRESHOLD) {
+    const instruction = lastUserText.split("\n\n")[0] || "Process the following text completely.";
+    const content = lastUserText;
+    const stream = parsed.stream === true;
+    const created = Math.floor(Date.now() / 1000);
+    const id = "chatcmpl-occli-" + Date.now().toString(36);
+    const reqStart = Date.now();
+    log("CHUNKED generation engaged:", lastUserText.length, "chars,", stream ? "(stream)" : "");
+    if (stream) {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] }) + "\n\n");
+    }
+    let stitched = "";
+    let chunkErr = null;
+    try {
+      stitched = await runChunked(instruction, content, normalizeModel(parsed.model), imagePaths);
+    } catch (e) { chunkErr = String(e).slice(0, 300); }
+    recordMetrics(normalizeModel(parsed.model), Date.now() - reqStart, chunkErr ? "error" : "ok");
+    if (stream) {
+      res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, delta: { content: chunkErr ? ("chunked generation failed: " + chunkErr) : stitched }, finish_reason: null }] }) + "\n\n");
+      res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + "\n\n");
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } else if (chunkErr) {
+      sendJson(res, 502, { error: { message: chunkErr, type: "upstream_error" } });
+    } else {
+      const out = jsonMode ? stripJsonFences(stitched) : stitched;
+      sendJson(res, 200, {
+        id, object: "chat.completion", created, model: normalizeModel(parsed.model),
+        choices: [{ index: 0, message: { role: "assistant", content: out }, finish_reason: "stop" }],
+        usage: { prompt_tokens: Math.ceil(lastUserText.length / 4), completion_tokens: Math.ceil(stitched.length / 4), total_tokens: 0 },
+      });
+    }
+    return;
+  }
   const prompt = buildPrompt(parsed.messages, parsed.tools, parsed.tool_choice, jsonMode, imagePaths, reasoningEffort);
   // Tool-call parsing runs ONLY when the request carried tools: a plain chat
   // answer that happens to contain JSON must stay a text answer.
@@ -516,7 +682,14 @@ async function handleChat(res, body) {
   // (9router/x, my-proxy/org/x, …) → verbatim (the worker whitelist then
   // decides; unknown names fall back to the default model, documented).
   const reqModel = normalizeModel(parsed.model);
-  try { job = submitJob(prompt, reqModel, imagePaths.length); } catch (e) {
+  // Optional project staging: point "stage" at an absolute folder and the
+  // worker copies it into the fresh run dir (native agent access) and syncs
+  // changed files back afterwards — the OpenCode-direct workflow.
+  let stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
+  if (stage && (!path.isAbsolute(stage) || !fs.existsSync(stage) || !fs.statSync(stage).isDirectory())) {
+    return sendJson(res, 400, { error: { message: "stage must be an existing absolute directory path" } });
+  }
+  try { job = submitJob(prompt, reqModel, imagePaths.length, stage); } catch (e) {
     return sendJson(res, 500, { error: { message: "job submit failed: " + String(e) } });
   }
 
@@ -525,9 +698,12 @@ async function handleChat(res, body) {
   // that file (the old shim built a JOBS_DIR .partial.txt the worker never
   // wrote, so streaming fell back to one final chunk).
   let partialSafe = null;
+  let partialReasoningSafe = null;
   if (SAFE_ID.test(job.id)) {
     const pp = path.resolve(PARTIALS_DIR, job.id + ".txt");
     if (pp.startsWith(path.resolve(PARTIALS_DIR) + path.sep)) partialSafe = pp;
+    const pr = path.resolve(PARTIALS_DIR, job.id + ".reasoning.txt");
+    if (pr.startsWith(path.resolve(PARTIALS_DIR) + path.sep)) partialReasoningSafe = pr;
   }
 
   if (stream) {
@@ -537,11 +713,13 @@ async function handleChat(res, body) {
     // SUPPRESSED instead: the model may be composing tool-call JSON, and
     // protocol JSON that leaks into content deltas cannot be retracted at
     // completion — buffered text is emitted once the shape is known.
+    // Reasoning deltas ALWAYS stream freely to prevent router timeout during deliberation.
     try {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
         choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] }) + "\n\n");
       let offset = 0;
+      let reasoningOffset = 0;
       const start = Date.now();
       const chunk = (delta, finish) => {
         res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
@@ -549,6 +727,17 @@ async function handleChat(res, body) {
       };
       const poll = () => {
         try {
+          if (partialReasoningSafe && fs.existsSync(partialReasoningSafe)) {
+            const stat = fs.statSync(partialReasoningSafe);
+            if (stat.size > reasoningOffset) {
+              const fd = fs.openSync(partialReasoningSafe, "r");
+              const buf = Buffer.alloc(stat.size - reasoningOffset);
+              fs.readSync(fd, buf, 0, buf.length, reasoningOffset);
+              fs.closeSync(fd);
+              reasoningOffset = stat.size;
+              chunk({ reasoning_content: buf.toString("utf8") });
+            }
+          }
           if (!toolsPresent && partialSafe && fs.existsSync(partialSafe)) {
             const stat = fs.statSync(partialSafe);
             if (stat.size > offset) {
@@ -564,11 +753,19 @@ async function handleChat(res, body) {
             let result;
             try { result = JSON.parse(fs.readFileSync(resultPath, "utf8")); } catch (_) { result = {}; }
             try { fs.unlinkSync(resultPath); } catch (_) {}
-            // Flush whatever text was not already streamed via partials —
-            // short answers can land in a single CLI event that the poll
-            // never catches mid-flight.
-            const full = result.text || "";
-            const calls = toolsPresent ? parseToolCalls(full) : [];
+            try { if (partialSafe && fs.existsSync(partialSafe)) fs.unlinkSync(partialSafe); } catch (_) {}
+            try { if (partialReasoningSafe && fs.existsSync(partialReasoningSafe)) fs.unlinkSync(partialReasoningSafe); } catch (_) {}
+
+            const rawText = result.text || "";
+            const { text: cleanText, reasoning: extractedReasoning } = extractThinking(rawText);
+            const totalReasoning = [result.reasoning, extractedReasoning].filter(Boolean).join("\n\n");
+
+            // Flush whatever reasoning was not already streamed via partials
+            if (totalReasoning && totalReasoning.length > reasoningOffset) {
+              chunk({ reasoning_content: totalReasoning.slice(reasoningOffset) });
+            }
+
+            const calls = toolsPresent ? parseToolCalls(cleanText) : [];
             if (calls.length) {
               calls.forEach((call, i) => {
                 chunk({ tool_calls: [{ index: i, id: "call_" + Date.now().toString(36) + "-" + i, type: "function",
@@ -576,14 +773,13 @@ async function handleChat(res, body) {
               });
               chunk({}, "tool_calls");
             } else {
-              if (result.reasoning) chunk({ reasoning_content: result.reasoning });
-              if (full.length > offset) chunk({ content: full.slice(offset) });
-              if (result.error && !full) chunk({ content: "upstream error: " + result.error });
+              if (cleanText.length > offset) chunk({ content: cleanText.slice(offset) });
+              if (result.error && !cleanText) chunk({ content: "upstream error: " + result.error });
               chunk({}, "stop");
             }
             res.write("data: [DONE]\n\n");
             res.end();
-            recordMetrics(reqModel, Date.now() - reqStart, (result.error && !full) ? (/429|FreeUsageLimit|limit/i.test(result.error) ? "limit" : "error") : "ok");
+            recordMetrics(reqModel, Date.now() - reqStart, (result.error && !cleanText) ? (/429|FreeUsageLimit|limit/i.test(result.error) ? "limit" : "error") : "ok");
             return;
           }
           if (Date.now() - start > WAIT_MS) {
@@ -630,8 +826,11 @@ async function handleChat(res, body) {
     }
   }
   const errText = result.error || "";
-  const text = result.text || "";
-  recordMetrics(reqModel, Date.now() - reqStart, errText && !text ? (/429|FreeUsageLimit|limit/i.test(errText) ? "limit" : "error") : "ok");
+  const rawText = result.text || "";
+  const { text: cleanText, reasoning: extractedReasoning } = extractThinking(rawText);
+  const totalReasoning = [result.reasoning, extractedReasoning].filter(Boolean).join("\n\n");
+
+  recordMetrics(reqModel, Date.now() - reqStart, errText && !cleanText ? (/429|FreeUsageLimit|limit/i.test(errText) ? "limit" : "error") : "ok");
   // The worker forwards the CLI's step-finish token counts when present; map
   // them onto OpenAI usage (reasoning tokens ride completion_tokens_details
   // per the OpenAI convention). All zeros when the CLI reported nothing.
@@ -645,23 +844,30 @@ async function handleChat(res, body) {
   if (tk && Number.isFinite(tk.reasoning) && tk.reasoning > 0) {
     usage.completion_tokens_details = { reasoning_tokens: tk.reasoning };
   }
-  if (errText && !text) {
+  if (errText && !cleanText) {
     sendJson(res, 502, { error: { message: errText, type: "upstream_error" } });
   } else {
-    const calls = toolsPresent ? parseToolCalls(text) : [];
+    const calls = toolsPresent ? parseToolCalls(cleanText) : [];
     if (calls.length) {
+      const message = {
+        role: "assistant",
+        content: null,
+        tool_calls: calls.map((call, i) => ({
+          id: "call_" + Date.now().toString(36) + "-" + i,
+          type: "function",
+          function: { name: call.name, arguments: JSON.stringify(call.arguments) }
+        }))
+      };
+      if (totalReasoning) message.reasoning_content = totalReasoning;
       sendJson(res, 200, {
         id, object: "chat.completion", created, model: reqModel,
-        choices: [{ index: 0, message: { role: "assistant", content: null,
-          tool_calls: calls.map((call, i) => ({ id: "call_" + Date.now().toString(36) + "-" + i, type: "function",
-            function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) },
-          finish_reason: "tool_calls" }],
+        choices: [{ index: 0, message, finish_reason: "tool_calls" }],
         usage,
       });
     } else {
-      const out = jsonMode ? stripJsonFences(text) : text;
+      const out = jsonMode ? stripJsonFences(cleanText) : cleanText;
       const message = { role: "assistant", content: out };
-      if (result.reasoning) message.reasoning_content = result.reasoning;
+      if (totalReasoning) message.reasoning_content = totalReasoning;
       sendJson(res, 200, {
         id, object: "chat.completion", created, model: reqModel,
         choices: [{ index: 0, message, finish_reason: "stop" }],
@@ -790,7 +996,7 @@ const server = http.createServer((req, res) => {
 });
 
 // Exports for unit tests (CI): pure functions only — no listeners started.
-module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, parseToolCalls, buildToolsProtocol, normalizeModel, MODELS };
+module.exports = { jobFilePath, attachmentPath, buildPrompt, parseToolCall, parseToolCalls, buildToolsProtocol, normalizeModel, MODELS, extractThinking, partialReasoningPathFor };
 
 // Start the HTTP server only when run directly (not when required by tests).
 if (require.main === module) {

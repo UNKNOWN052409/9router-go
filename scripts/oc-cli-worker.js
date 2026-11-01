@@ -29,12 +29,20 @@ const path = require("path");
 const os = require("os");
 
 // Data root is environment-overridable (OC_DATA_DIR) so the stack runs on any
-// machine/hostname without code edits. Defaults: Windows keeps the original
-// D:\scratch\oc-cli-api; other platforms use ~/.oc-free-tier-shim.
-const DATA_ROOT = path.resolve(
-  process.env.OC_DATA_DIR ||
-  (process.platform === "win32" ? "D:\\scratch\\oc-cli-api" : path.join(os.homedir(), ".oc-free-tier-shim"))
-);
+// machine/hostname without code edits. Defaults: Windows keeps D:\scratch\oc-cli-api
+// if present, otherwise falls back to ~/.oc-free-tier-shim.
+function defaultDataRoot() {
+  if (process.env.OC_DATA_DIR) return path.resolve(process.env.OC_DATA_DIR);
+  if (process.platform === "win32") {
+    try {
+      if (fs.existsSync("D:\\")) {
+        return path.resolve("D:\\scratch\\oc-cli-api");
+      }
+    } catch (_) {}
+  }
+  return path.join(os.homedir(), ".oc-free-tier-shim");
+}
+const DATA_ROOT = defaultDataRoot();
 const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
 
@@ -45,6 +53,89 @@ function partialPathFor(base) {
   const target = path.resolve(PARTIALS_DIR, base + ".txt");
   const root = path.resolve(PARTIALS_DIR) + path.sep;
   return target.startsWith(root) ? target : null;
+}
+
+function partialReasoningPathFor(base) {
+  if (!SAFE_ID.test(base)) return null;
+  const target = path.resolve(PARTIALS_DIR, base + ".reasoning.txt");
+  const root = path.resolve(PARTIALS_DIR) + path.sep;
+  return target.startsWith(root) ? target : null;
+}
+
+// ---------------------------------------------------------------------------
+// Proxy pool: residential / rotating proxies from @KaiiddoProxyBot or ProxyRise
+// loaded from OC_PROXIES, OC_PROXY, or proxies.txt with automatic rotation.
+// Supports host:port:user:pass, host:port, or full http/socks5 URLs.
+// ---------------------------------------------------------------------------
+function parseProxyString(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const str = raw.trim();
+  if (!str || str.startsWith("#")) return null;
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(str)) {
+    try {
+      const u = new URL(str);
+      return {
+        url: u.href,
+        protocol: u.protocol,
+        host: u.hostname,
+        port: u.port,
+        auth: u.username ? (u.username + (u.password ? ":" + u.password : "")) : null,
+      };
+    } catch (_) {}
+  }
+
+  const parts = str.split(":");
+  if (parts.length === 4) {
+    const [host, port, user, pass] = parts;
+    const url = "http://" + encodeURIComponent(user) + ":" + encodeURIComponent(pass) + "@" + host + ":" + port;
+    return { url, protocol: "http:", host, port, auth: user + ":" + pass };
+  } else if (parts.length === 2) {
+    const [host, port] = parts;
+    const url = "http://" + host + ":" + port;
+    return { url, protocol: "http:", host, port, auth: null };
+  }
+  return null;
+}
+
+let proxyIndex = 0;
+function loadProxies() {
+  const list = [];
+  const add = (entry) => {
+    const parsed = parseProxyString(entry);
+    if (parsed) list.push(parsed);
+  };
+
+  if (process.env.OC_PROXIES) {
+    process.env.OC_PROXIES.split(/[\r\n,]+/).forEach(add);
+  }
+  if (process.env.OC_PROXY) {
+    add(process.env.OC_PROXY);
+  }
+  const candidates = [
+    path.resolve("proxies.txt"),
+    path.join(__dirname, "proxies.txt"),
+    path.join(__dirname, "..", "..", "proxies.txt"),
+    path.join(DATA_ROOT, "proxies.txt"),
+  ];
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) {
+      try {
+        const lines = fs.readFileSync(cand, "utf8").split(/\r?\n/);
+        for (const line of lines) add(line);
+        break;
+      } catch (_) {}
+    }
+  }
+  return list;
+}
+
+function getNextProxy() {
+  const proxies = loadProxies();
+  if (!proxies.length) return null;
+  const chosen = proxies[proxyIndex % proxies.length];
+  proxyIndex = (proxyIndex + 1) % proxies.length;
+  return chosen;
 }
 // Binary resolution: OPENCODE_BIN env wins; then the standard Windows npm
 // global path (if present); otherwise assume "opencode" is on PATH
@@ -78,7 +169,7 @@ const DEFAULT_MODEL_ARGS = MODEL_RUN_ARGS["mimo-v2.6-flash-free"];
 // auto-rejected by the permission system). The --file argv elements are
 // built from loop integers and a fixed extension whitelist only — no data
 // from a job file ever becomes an argv element.
-const ATTACH_SRC_DIR = path.resolve("D:\\scratch\\oc-cli-api\\attachments");
+const ATTACH_SRC_DIR = path.join(DATA_ROOT, "attachments");
 const ATTACH_EXTS = ["png", "jpg", "gif", "webp"];
 
 // Picks the spawn argv base from literal tables only. The requested model is
@@ -232,10 +323,11 @@ async function serveChat(prompt, model, files, onPartial) {
   for (const p of out.parts) {
     if (p && p.type === "text" && p.text) {
       text += p.text;
-      if (onPartial) { try { onPartial(p.text); } catch (_) {} }
+      if (onPartial) { try { onPartial(p.text, false); } catch (_) {} }
     } else if (p && (p.type === "reasoning" || p.type === "reasoning_content") && p.text) {
       // Some models emit visible reasoning parts; forwarded as reasoning_content.
       reasoning += p.text;
+      if (onPartial) { try { onPartial(p.text, true); } catch (_) {} }
     }
   }
   const blob = JSON.stringify(out);
@@ -396,7 +488,18 @@ const args = selectArgv(model).concat(attachArgs);
     // PWD must point at the run dir: the CLI resolves its project root from
     // the inherited PWD env var, not process.cwd() — a stale PWD (from
     // whoever launched the worker) made staged projects invisible.
-    const env = Object.assign({}, process.env, {
+    const proxy = getNextProxy();
+    const proxyEnv = {};
+    if (proxy) {
+      proxyEnv.HTTP_PROXY = proxy.url;
+      proxyEnv.HTTPS_PROXY = proxy.url;
+      proxyEnv.ALL_PROXY = proxy.url;
+      proxyEnv.http_proxy = proxy.url;
+      proxyEnv.https_proxy = proxy.url;
+      proxyEnv.all_proxy = proxy.url;
+      log("using proxy:", proxy.host + ":" + proxy.port);
+    }
+    const env = Object.assign({}, process.env, proxyEnv, {
       HOME: process.env.OC_HOME || (process.platform === "win32" ? (process.env.USERPROFILE || os.homedir()) : process.env.HOME),
       PWD: runDir,
       OLDPWD: runDir,
@@ -433,11 +536,12 @@ const args = selectArgv(model).concat(attachArgs);
         const part = ev.part || {};
         if (ev.type === "text" && part.text) {
           text += part.text;
-          if (onPartial) { try { onPartial(part.text); } catch (_) {} }
+          if (onPartial) { try { onPartial(part.text, false); } catch (_) {} }
         }
         else if ((part.type === "reasoning" || part.type === "reasoning_content") && part.text) {
           // Visible reasoning parts some models emit; forwarded as reasoning_content.
           reasoning += part.text;
+          if (onPartial) { try { onPartial(part.text, true); } catch (_) {} }
         }
         else if (ev.type === "step_finish" && part.tokens && typeof part.tokens === "object") {
           // step-finish carries the CLI's token accounting (input/output/
@@ -504,6 +608,7 @@ function processJob(job, base) {
   // Streaming partials: every text delta the CLI emits is appended here so
   // the shim can forward real-time SSE chunks to its client.
   const partialPath = partialPathFor(base);
+  const partialReasoningPath = partialReasoningPathFor(base);
   // Model is whitelist-gated: only names with a literal argv entry run as
   // themselves; a name carrying any provider prefix resolves by its last
   // path segment first; anything else falls back to the default model's
@@ -520,7 +625,6 @@ function processJob(job, base) {
   // answers a transient 401/429/5xx for the same key. Retry with a new
   // session (and thus a new exit) up to 6 times before giving up.
   const stage = typeof job.stage === "string" ? job.stage : "";
-  let bestShort = "";   // best short answer seen across retry attempts
   // CONTINUATION STITCHING: long-output tasks (big translations, large code
   // generation) outrun any fixed CLI timeout — the run ends with a PARTIAL
   // answer plus a timeout error. Instead of shipping the partial (the client
@@ -532,8 +636,12 @@ function processJob(job, base) {
   let accumulated = "";          // stitched text across continuation passes
   let carryPrompt = String(job.prompt || "hello");
   const attempt = (n) => {
-    runJob(carryPrompt, model, Number(job.attach) || 0, (delta) => {
-      if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
+    runJob(carryPrompt, model, Number(job.attach) || 0, (delta, isReasoning) => {
+      if (isReasoning) {
+        if (partialReasoningPath) { try { fs.appendFileSync(partialReasoningPath, delta); } catch (_) {} }
+      } else {
+        if (partialPath) { try { fs.appendFileSync(partialPath, delta); } catch (_) {} }
+      }
     }, stage).then((result) => {
       const err = result.error || "";
       const transient = /Invalid API key|FreeUsageLimit|429|timeout|rate|socket|disconnected|cannot connect|ECONN|fetch failed|network|certificate|TLS|SSL|reset by (server|peer)/i.test(err);
@@ -547,23 +655,11 @@ function processJob(job, base) {
         accumulated += (accumulated ? "\n" : "") + piece;
         log(base, "attempt " + n + " partial on timeout (" + piece.length + " chars, " + accumulated.length + " accumulated) — continuing");
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        if (partialReasoningPath) { try { fs.rmSync(partialReasoningPath, { force: true }); } catch (_) {} }
         carryPrompt = String(job.prompt || "hello") +
           "\n\n[SYSTEM] You already produced the following PARTIAL output for this exact task:\n\n" +
           piece.slice(-8000) +
           "\n\n[SYSTEM] CONTINUE EXACTLY from where that output stops. Do NOT repeat any earlier content. Do not add commentary or headings — just continue the task seamlessly to its end. If and only if the task is fully complete, reply with the single word CONTINUE-COMPLETE.";
-        setTimeout(() => attempt(n + 1), 1500);
-        return;
-      }
-      // A ONE-LINE answer on a HUGE prompt is degraded generation, not a real
-      // answer: near the context limit glm sometimes emits a single short
-      // line and stops (measured live: 78 chars out of a 248k-char request).
-      // Retry with a fresh session and deliver whichever attempt answered
-      // more. Small prompts are exempt — a short answer there is legitimate.
-      if (!err && result.text && result.text.length < 150 &&
-          String(carryPrompt || "").length > 100000 && n < 2) {
-        if (result.text.length > bestShort.length) bestShort = result.text;
-        log(base, "attempt " + n + " one-line answer on huge prompt (" + result.text.length + " chars) — retrying for a fuller answer");
-        if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
         setTimeout(() => attempt(n + 1), 1500);
         return;
       }
@@ -574,21 +670,19 @@ function processJob(job, base) {
       if (!err && !result.text && !accumulated && n < 3) {
         log(base, "attempt " + n + " empty completion — retrying");
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        if (partialReasoningPath) { try { fs.rmSync(partialReasoningPath, { force: true }); } catch (_) {} }
         setTimeout(() => attempt(n + 1), 1500);
         return;
       }
-
       if (err && transient && !accumulated && n < 6) {
         log(base, "attempt " + n + " transient (" + err.slice(0, 500) + ") — retrying");
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        if (partialReasoningPath) { try { fs.rmSync(partialReasoningPath, { force: true }); } catch (_) {} }
         setTimeout(() => attempt(n + 1), 2000);
         return;
       }
       let finalText = result.text || "";
       if (accumulated) finalText = accumulated + (finalText ? "\n" + finalText : "");
-      // If every attempt came back one-line-degraded, deliver the best line
-      // we got rather than an empty shell.
-      if (finalText.length < bestShort.length) finalText = bestShort;
       let finalError = err;
       // A timeout that still leaves a stitched answer is delivered as success:
       // the client gets the complete stitched output rather than a 502.
@@ -596,6 +690,7 @@ function processJob(job, base) {
       try {
         fs.writeFileSync(outPath, JSON.stringify({ text: finalText, error: finalError, tokens: result.tokens, reasoning: result.reasoning }));
         if (partialPath) { try { fs.rmSync(partialPath, { force: true }); } catch (_) {} }
+        if (partialReasoningPath) { try { fs.rmSync(partialReasoningPath, { force: true }); } catch (_) {} }
         log(base, "done, chars=" + finalText.length + (accumulated ? " (stitched " + accumulated.length + ")" : ""), finalError ? "error=" + String(finalError).slice(0, 80) : "");
       } catch (e) { log(base, "write result failed:", String(e).slice(0, 80)); }
       inflight.delete(base);
@@ -686,7 +781,7 @@ function main() {
   });
 }
 // Exports for unit tests (CI): pure functions only — no polling started.
-module.exports = { jobFilePath, partialPathFor, runDirFor, selectArgv, SAFE_ID, MODEL_RUN_ARGS, ATTACH_EXTS };
+module.exports = { jobFilePath, partialPathFor, partialReasoningPathFor, runDirFor, selectArgv, SAFE_ID, MODEL_RUN_ARGS, ATTACH_EXTS, parseProxyString, loadProxies, getNextProxy };
 
 // Start the job sweep only when run directly (not when required by tests).
 if (require.main === module) {
