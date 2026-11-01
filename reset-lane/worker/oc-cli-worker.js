@@ -518,7 +518,7 @@ const args = selectArgv(model).concat(attachArgs);
       // Tree-kill: the CLI spawns its own children; a bare kill() leaves
       // them running as orphans (the process mob the user asked cleaned).
       if (process.platform === "win32" && child.pid) {
-        try { execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], () => {}); } catch (_) {}
+        try { execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {}); } catch (_) {}
       } else {
         try { child.kill(); } catch (_) {}
       }
