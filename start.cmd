@@ -1,50 +1,39 @@
 @echo off
 rem ============================================================
-rem  START - boots the whole free-model lane in one command.
-rem
-rem  What this starts (all hidden, no console windows):
-rem    1. oc-cli-api.js    - OpenAI-compatible shim on 127.0.0.1:20142
-rem    2. oc-cli-worker.js - fresh-session job runner (also boots the
-rem                          persistent opencode serve on 20193)
-rem
-rem  Nothing else is required: point any OpenAI client at
-rem    http://127.0.0.1:20142/v1        (standalone mode)
-rem  and use model ids like glm-5.3-flash-free.
-rem
-rem  Optional: pass --with-router to also apply the node-9router registry
-rem  patch and start the gateway when its start script is known (set the
-rem  N9R_GATEWAY_START env var to that script's full path; N9R_HOME\rotation\
-rem  start-9router-go-rotation.cmd is tried as a fallback).
+rem  START - boots 9router + Reset-Lane in one command
+rem  All background processes run hidden (no annoying windows).
 rem ============================================================
 setlocal
-set "DIR=%~dp0reset-lane"
+title 9Router + Reset-Lane Starter
+cd /d "%~dp0"
 
-rem --- 1. shim (API front-end) ---
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-api' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\shim\oc-cli-api.js'; Write-Output 'shim started' } else { Write-Output 'shim already running' } }"
-
-rem --- 2. worker (fresh-session runner; serve boots inside it) ---
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'oc-cli-worker' } | Measure-Object | ForEach-Object { if ($_.Count -eq 0) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\worker\oc-cli-worker.js'; Write-Output 'worker started' } else { Write-Output 'worker already running' } }"
-
-rem --- 3. router wiring (idempotent; skips when no 9router database exists) ---
-if exist "%DIR%\tools\seed-router-combos.js" node "%DIR%\tools\seed-router-combos.js"
-
-rem --- 4. optional: node-9router registry patch + gateway start ---
-if /i "%1"=="--with-router" (
-    if exist "%DIR%\tools\patch-node9router-oc.js" (
-        node "%DIR%\tools\patch-node9router-oc.js"
-        echo [start] node-9router oc/ lane patched if needed.
-    )
-    if defined N9R_GATEWAY_START (
-        call "%N9R_GATEWAY_START%"
-        echo [start] gateway start script invoked.
-    ) else if defined N9R_HOME (
-        if exist "%N9R_HOME%\rotation\start-9router-go-rotation.cmd" call "%N9R_HOME%\rotation\start-9router-go-rotation.cmd"
-    )
-)
-
-rem --- health check ---
-timeout /t 3 /nobreak >nul
-curl -s -m 5 http://127.0.0.1:20142/health
 echo.
-echo [start] done. Endpoint: http://127.0.0.1:20142/v1  (model example: glm-5.3-flash-free)
+echo ============================================================
+echo   Starting 9Router + OpenCode Reset-Lane (GLM-5.3-Flash)...
+echo ============================================================
+
+set "DIR=%~dp0reset-lane"
+set "APP_DIR=%APPDATA%\npm\node_modules\9router"
+
+rem --- 1. Reset-Lane Worker (Port 20194) ---
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Get-NetTCPConnection -LocalPort 20194 -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' }; if (-not $c) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\worker\oc-cli-worker.js'; Write-Host '[+] Started Reset-Lane Worker' } else { Write-Host '[=] Reset-Lane Worker already running' }"
+
+rem --- 2. Reset-Lane Shim (Port 20142) ---
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Get-NetTCPConnection -LocalPort 20142 -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' }; if (-not $c) { Start-Process -WindowStyle Hidden node -ArgumentList '%DIR%\shim\oc-cli-api.js'; Write-Host '[+] Started Reset-Lane Shim' } else { Write-Host '[=] Reset-Lane Shim already running' }"
+
+rem --- 3. 9Router Gateway (Port 20128) ---
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Get-NetTCPConnection -LocalPort 20128 -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' }; if (-not $c) { $env:PORT='20128'; $env:HOSTNAME='0.0.0.0'; $env:NODE_PATH='%APPDATA%\9router\runtime\node_modules;%APP_DIR%\app\node_modules'; Start-Process -WindowStyle Hidden node -ArgumentList '--dns-result-order=ipv4first', '--max-old-space-size=6144', '%APP_DIR%\app\custom-server.js'; Write-Host '[+] Started 9Router Gateway' } else { Write-Host '[=] 9Router Gateway already running' }"
+
+rem --- 4. Wait 2 seconds and verify status ---
+ping 127.0.0.1 -n 3 >nul
+echo.
+echo ============================================================
+node -e "const net = require('net'); const ports = { 20142: 'Reset-Lane Shim  (Port 20142)', 20194: 'Reset-Lane Worker(Port 20194)', 20128: '9Router Gateway  (Port 20128)' }; for (const [p, name] of Object.entries(ports)) { const s = net.connect(Number(p), '127.0.0.1', () => { console.log('  [OK] ' + name + ' : ONLINE'); s.destroy(); }); s.on('error', () => console.log('  [!]  ' + name + ' : FAILED TO START')); }"
+ping 127.0.0.1 -n 2 >nul
+echo ============================================================
+echo   Status: Everything is ready!
+echo   Claude Code / Cursor / Cline can now connect.
+echo ============================================================
+echo.
+pause
 endlocal
