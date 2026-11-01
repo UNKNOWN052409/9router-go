@@ -38,7 +38,7 @@ function defaultDataRoot() {
 const DATA_ROOT = defaultDataRoot();
 const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
-const MODEL_ID = "glm-5.3-flash-free";
+const MODEL_ID = "deepseek-v4.1-flash-free";
 // Known free-model names — the whitelist used by model normalization below
 // and advertised by GET /v1/models.
 const MODELS = [

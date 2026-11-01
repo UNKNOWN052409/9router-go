@@ -160,7 +160,7 @@ const MODEL_RUN_ARGS = {
   "muse-spark-1.3-contributor-free": ["run", "--format", "json", "--model", "opencode/muse-spark-1.3-contributor-free"],
   "jev-1.13-free": ["run", "--format", "json", "--model", "opencode/jev-1.13-free"],
 };
-const DEFAULT_MODEL_ARGS = MODEL_RUN_ARGS["mimo-v2.6-flash-free"];
+const DEFAULT_MODEL_ARGS = MODEL_RUN_ARGS["deepseek-v4.1-flash-free"];
 
 // Image attachments: the shim stages decoded images in ATTACH_SRC_DIR as
 // attachment-<i>.<ext> (i = 1..N per request). The worker copies the
@@ -618,7 +618,7 @@ function processJob(job, base) {
     const last = model.slice(model.lastIndexOf("/") + 1);
     if (Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, last)) model = last;
   }
-  if (!Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model)) model = "mimo-v2.6-flash-free";
+  if (!Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model)) model = "deepseek-v4.1-flash-free";
   log(base, "running, promptChars=" + String(job.prompt || "").length, "model=" + model);
 
   // Rotating-exit reality: a fresh ProxyRise IP can land on an edge that
