@@ -160,7 +160,7 @@ const MODEL_RUN_ARGS = {
   "muse-spark-1.3-contributor-free": ["run", "--format", "json", "--model", "opencode/muse-spark-1.3-contributor-free"],
   "jev-1.13-free": ["run", "--format", "json", "--model", "opencode/jev-1.13-free"],
 };
-const DEFAULT_MODEL_ARGS = MODEL_RUN_ARGS["deepseek-v4.1-flash-free"];
+const DEFAULT_MODEL_ARGS = MODEL_RUN_ARGS["glm-5.3-flash-free"];
 
 // Image attachments: the shim stages decoded images in ATTACH_SRC_DIR as
 // attachment-<i>.<ext> (i = 1..N per request). The worker copies the
@@ -416,8 +416,11 @@ function syncBack(manifest, runDir) {
 }
 
 function runJob(prompt, model, files, onPartial, stage) {
-  const proxies = loadProxies();
-  if (stage || (proxies && proxies.length > 0) || String(prompt || "").length > 8000) {
+  // A staged project needs the spawn path: the project is copied into the
+  // fresh run dir (its own sandbox), so the persistent serve is bypassed.
+  // Large prompts also skip the serve: its 300s ceiling is below the
+  // generation time a big-context request needs.
+  if (stage || String(prompt || "").length > 8000) {
     return spawnRunJob(prompt, model, files, onPartial, stage);
   }
   // Fast path first; on any null result the spawn path below runs as before.
@@ -615,7 +618,7 @@ function processJob(job, base) {
     const last = model.slice(model.lastIndexOf("/") + 1);
     if (Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, last)) model = last;
   }
-  if (!Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model)) model = "deepseek-v4.1-flash-free";
+  if (!Object.prototype.hasOwnProperty.call(MODEL_RUN_ARGS, model)) model = "glm-5.3-flash-free";
   log(base, "running, promptChars=" + String(job.prompt || "").length, "model=" + model);
 
   // Rotating-exit reality: a fresh ProxyRise IP can land on an edge that

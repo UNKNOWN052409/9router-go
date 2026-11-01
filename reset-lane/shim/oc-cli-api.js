@@ -38,7 +38,7 @@ function defaultDataRoot() {
 const DATA_ROOT = defaultDataRoot();
 const JOBS_DIR = path.join(DATA_ROOT, "jobs");
 const PARTIALS_DIR = path.join(DATA_ROOT, "partials");
-const MODEL_ID = "deepseek-v4.1-flash-free";
+const MODEL_ID = "glm-5.3-flash-free";
 // Known free-model names — the whitelist used by model normalization below
 // and advertised by GET /v1/models.
 const MODELS = [
@@ -75,7 +75,7 @@ function normalizeModel(raw) {
 }
 const WAIT_MS = parseInt(process.env.OC_WAIT_MS || "900000", 10); // must cover the worker's scaled timeout
 const POLL_MS = 150;
-const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "150000", 10); // auto-compact target: keeps glm in its comfortable zone // raise for larger-context models
+const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "30000", 10); // compact target for fast sub-5s response
 
 const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
 function log(...parts) {
@@ -441,7 +441,7 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
     (!Array.isArray(tools) || !tools.length) && passiveEnabled() ? PASSIVE_TOOLS : tools,
     toolChoice
   );
-  const budget = Math.max(MAX_PROMPT_CHARS - protoEarly.length - 512, 40000);
+  const budget = Math.max(MAX_PROMPT_CHARS - protoEarly.length - 512, 15000);
   const toolIdx = [];
   turns.forEach((t, i) => { if (t.startsWith("[Tool result for ")) toolIdx.push(i); });
   const keepFull = new Set(toolIdx.slice(-3));
