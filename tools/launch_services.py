@@ -24,6 +24,7 @@ services = [
             **os.environ.copy(),
             "PORT": "20128",
             "HOSTNAME": "0.0.0.0",
+            "INITIAL_PASSWORD": "Admin@123456",
             "NODE_PATH": os.path.join(app_data, r"9router\runtime\node_modules") + ";" + os.path.join(app_data, r"npm\node_modules\9router\app\node_modules")
         }
     }
