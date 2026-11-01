@@ -423,7 +423,7 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
       continue;
     }
     if (!String(text).trim()) continue;
-    if (role === "system") turns.push("[System]\n" + text);
+    if (role === "system") turns.push("=== SYSTEM INSTRUCTIONS (HIGHEST PRIORITY) ===\n" + text + "\n=== END SYSTEM INSTRUCTIONS ===");
     else if (role === "assistant") turns.push("[Assistant]\n" + text);
     else turns.push("[User]\n" + text);
   }
@@ -451,7 +451,7 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
     const omitted = t.length - nl - 300;
     return t.slice(0, nl + 1) + t.slice(nl + 1, nl + 301) + "\n...[older tool result truncated, " + omitted + " chars omitted — the file is still on disk, re-read if needed]";
   });
-  const head = compacted.length && compacted[0].startsWith("[System]") ? compacted[0] : null;
+  const head = compacted.length && (compacted[0].startsWith("=== SYSTEM INSTRUCTIONS") || compacted[0].startsWith("[System]")) ? compacted[0] : null;
   const pool = head ? compacted.slice(1) : compacted;
   let kept = [];
   let keptCount = 0;
@@ -725,8 +725,13 @@ async function handleChat(res, body) {
         res.write("data: " + JSON.stringify({ id, object: "chat.completion.chunk", created, model: reqModel,
           choices: [{ index: 0, delta, finish_reason: finish === undefined ? null : finish }] }) + "\n\n");
       };
+      let lastPing = Date.now();
       const poll = () => {
         try {
+          if (Date.now() - lastPing > 6000) {
+            try { res.write(": ping\n\n"); } catch (_) {}
+            lastPing = Date.now();
+          }
           if (partialReasoningSafe && fs.existsSync(partialReasoningSafe)) {
             const stat = fs.statSync(partialReasoningSafe);
             if (stat.size > reasoningOffset) {
