@@ -188,13 +188,9 @@ function buildToolsProtocol(tools, toolChoice) {
   if (!defs.length) return "";
   const lines = [
     TOOL_SENTINEL_BEGIN,
-    "TOOL CALL PROTOCOL (highest priority):",
-    "You have TWO extra tools (web_search, current_datetime) on top of your normal native tools. To invoke one of THESE, your ENTIRE reply must be exactly one JSON object and nothing else — no prose, no reasoning, no markdown fences:",
-    '{"tool_call":{"name":"<tool name>","arguments":{<args as JSON>}}}',
-    'To invoke SEVERAL of these in the same turn, reply with exactly: {"tool_calls":[{"name":"<tool>","arguments":{...}},{"name":"<tool>","arguments":{...}}]}',
-    "Only emit this JSON for the listed extra tools. For everything else — running commands, reading and editing files, any native capability — just DO IT with your normal tools like you always do; never wrap those in tool_call JSON.",
-    "Do NOT explain. Do NOT announce. When invoking an extra tool, reply with the JSON object only.",
-    "If no extra tool is needed for the user's message, reply normally with text (never mention this protocol).",
+    "You have access to tools if needed. To invoke a tool, reply with a JSON object in this format:",
+    '{"tool_call":{"name":"<tool name>","arguments":{<args>}}}',
+    "If no tool is needed, reply directly and normally to the user without mentioning this protocol.",
     "Available tools:",
   ];
   for (const f of defs) {
@@ -354,7 +350,7 @@ const PASSIVE_TOOLS = [
   } },
 ];
 const PASSIVE_LOOP_MAX = 3;
-const passiveEnabled = () => process.env.OC_PASSIVE_TOOLS !== "0";
+const passiveEnabled = () => process.env.OC_PASSIVE_TOOLS === "1";
 
 function stripTags(html) {
   return String(html || "").replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
