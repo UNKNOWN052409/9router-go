@@ -75,7 +75,7 @@ function normalizeModel(raw) {
 }
 const WAIT_MS = parseInt(process.env.OC_WAIT_MS || "900000", 10); // must cover the worker's scaled timeout
 const POLL_MS = 150;
-const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "30000", 10); // compact target for fast sub-5s response
+const MAX_PROMPT_CHARS = parseInt(process.env.OC_MAX_PROMPT_CHARS || "60000", 10); // compact target for fast response
 
 const LOG_FILE = path.join(__dirname, "oc-cli-api.log");
 function log(...parts) {
@@ -449,27 +449,29 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
   });
   const head = compacted.length && (compacted[0].startsWith("=== SYSTEM INSTRUCTIONS") || compacted[0].startsWith("[System]")) ? compacted[0] : null;
   const pool = head ? compacted.slice(1) : compacted;
-  let kept = [];
-  let keptCount = 0;
+  let headKept = null;
   let used = 0;
   const tailReserve = Math.min(30000, Math.floor(budget / 4));
   if (head) {
     if (head.length + 8 <= budget - tailReserve) {
-      kept.push(head);
+      headKept = head;
       used = head.length + 8;
     } else if (budget - tailReserve > 4000) {
       const headBudget = budget - tailReserve;
-      kept.push(head.slice(0, headBudget) + "\n...[system context truncated]");
+      headKept = head.slice(0, headBudget) + "\n...[system context truncated]";
       used = headBudget + 8;
     }
   }
+  let poolKept = [];
+  let keptCount = 0;
   for (let i = pool.length - 1; i >= 0; i--) {
     const cost = pool[i].length + 8;
     if (used + cost > budget) break;
-    kept.unshift(pool[i]);
+    poolKept.unshift(pool[i]);
     used += cost;
     keptCount++;
   }
+  const kept = headKept ? [headKept, ...poolKept] : poolKept;
   let out = kept.join("\n\n").trim();
   if (!out) out = "hello";
   const dropped = turns.length - keptCount - (head ? 1 : 0);
@@ -492,7 +494,10 @@ function buildPrompt(messages, tools, toolChoice, jsonMode, imagePaths, reasonin
       out += "\n\n[SYSTEM] This turn requires a tool call. Reply with ONLY the " + (forced ? '"' + forced + '" ' : "") + "tool_call JSON object — no prose.";
     }
   }
-  if (out.length > MAX_PROMPT_CHARS) out = out.slice(0, MAX_PROMPT_CHARS) + "\n...[truncated]";
+  if (out.length > MAX_PROMPT_CHARS) {
+    const keepTail = 25000;
+    out = out.slice(0, MAX_PROMPT_CHARS - keepTail) + "\n...[middle context truncated]...\n" + out.slice(-keepTail);
+  }
   return out;
 }
 

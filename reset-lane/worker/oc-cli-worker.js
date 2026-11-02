@@ -418,9 +418,7 @@ function syncBack(manifest, runDir) {
 function runJob(prompt, model, files, onPartial, stage) {
   // A staged project needs the spawn path: the project is copied into the
   // fresh run dir (its own sandbox), so the persistent serve is bypassed.
-  // Large prompts also skip the serve: its 300s ceiling is below the
-  // generation time a big-context request needs.
-  if (stage || String(prompt || "").length > 8000) {
+  if (stage) {
     return spawnRunJob(prompt, model, files, onPartial, stage);
   }
   // Fast path first; on any null result the spawn path below runs as before.
